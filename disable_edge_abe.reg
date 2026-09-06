@@ -1,0 +1,9 @@
+Windows Registry Editor Version 5.00
+
+; 关闭 Microsoft Edge 的 App-Bound Encryption (ABE)
+; 作用：让自动化(Playwright)能读取并随请求发送 Edge 的登录 cookie
+; 用法：右键本文件 -> 以管理员身份合并；然后完全关闭 Edge 再重开
+; 注意：此策略会降低 Edge 本地数据安全性（其他程序也能取解密密钥），仅在本机自用场景可接受
+; 撤销：把 dword 改为 00000001，或删除该值，再重启 Edge
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Edge]
+"ApplicationBoundEncryptionEnabled"=dword:00000000

@@ -1,0 +1,14 @@
+# ⚠️ 浏览器登录 profile —— 含真实登录 cookie / session，绝不可提交
+wb_auto_profile_edge/
+
+# WorkBuddy 项目数据与自动化执行记录（含个人信息）
+.workbuddy/
+
+# 依赖与日志
+node_modules/
+*.log
+*.old
+
+# 系统文件
+.DS_Store
+Thumbs.db
