@@ -19,6 +19,13 @@ node wb_checkin.js --checkin
 node wb_auto_task.js
 ```
 
+不想敲命令可以双击（会自动切到脚本目录并调用正确的 node）：
+
+| 双击 | 作用 |
+| --- | --- |
+| `run_login.bat` | 登录一次 —— 登录态过期、派猫报 `login:false` 时用它 |
+| `run_cat.bat` | 派猫猫旅行 |
+
 ### 签到结果判定
 - `code=0` 且出现 `credit` / `streak_days` → 领取成功
 - `code=10001`（今天已签到）→ 幂等，无需重复，视为成功

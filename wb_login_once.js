@@ -72,30 +72,37 @@ function printNetHelp() {
 }
 
 // 权威验证：headless 打开成长中心，看是否仍被 302 到登录页
+// 失败会自动重试一次（上一个浏览器刚退出时 profile 可能还没释放干净）
 async function verifyLogin() {
-  killStaleEdge();
-  await sleep(1200);
-  let context;
-  try {
-    context = await chromium.launchPersistentContext(PROFILE, {
-      executablePath: EDGE, headless: true, timeout: 45000,
-      args: ['--no-first-run', '--disable-gpu', '--disable-dev-shm-usage'],
-    });
-  } catch (e) {
-    return 'verify-failed:' + String(e.message || e).split('\n')[0];
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    killStaleEdge();
+    await sleep(2000);
+    let context;
+    try {
+      context = await chromium.launchPersistentContext(PROFILE, {
+        executablePath: EDGE, headless: true, timeout: 45000,
+        args: ['--no-first-run', '--disable-gpu', '--disable-dev-shm-usage'],
+      });
+    } catch (e) {
+      if (attempt === 2) return 'verify-failed:' + String(e.message || e).split('\n')[0];
+      continue;
+    }
+    let verdict;
+    try {
+      const page = context.pages()[0] || await context.newPage();
+      await page.goto(GROWTH, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await sleep(3000);
+      verdict = /\/login/.test(page.url()) ? 'not-logged-in' : 'logged-in';
+    } catch (e) {
+      verdict = 'network-error:' + String(e.message || e).split('\n')[0];
+    }
+    try { await context.close(); } catch (e) {}
+    killStaleEdge();
+    if (verdict === 'logged-in' || verdict === 'not-logged-in') return verdict;
+    if (attempt === 1) { await sleep(3000); continue; }
+    return verdict;
   }
-  let verdict;
-  try {
-    const page = context.pages()[0] || await context.newPage();
-    await page.goto(GROWTH, { waitUntil: 'domcontentloaded', timeout: 25000 });
-    await sleep(3000);
-    verdict = /\/login/.test(page.url()) ? 'not-logged-in' : 'logged-in';
-  } catch (e) {
-    verdict = 'network-error'; // 网络不通，无法判定，区别于「没登录」
-  }
-  try { await context.close(); } catch (e) {}
-  killStaleEdge();
-  return verdict;
+  return 'verify-failed:未知';
 }
 
 (async () => {
@@ -209,9 +216,10 @@ async function verifyLogin() {
     console.log('✅ 登录态有效 —— 成长中心可直接进入，每日派猫自动化可正常运行。');
   } else if (verdict === 'not-logged-in') {
     console.log('❌ 仍未登录 —— 成长中心被重定向到登录页，请重跑本脚本完成登录。');
-  } else if (verdict === 'network-error') {
-    console.log('⚠️ 无法验证 —— 网络不通（与是否登录无关）。请检查代理/DNS 后重试。');
-    printNetHelp();
+  } else if (verdict.startsWith('network-error')) {
+    console.log('⚠️ 复验这一步没能完成: ' + verdict.slice('network-error:'.length));
+    console.log('   这多半与登录无关 —— 常见原因是上一步的浏览器刚退出、profile 还没释放干净。');
+    console.log('   直接双击 run_cat.bat 跑一次派猫，看输出里 login 是否为 true 即可确认登录态。');
   } else {
     console.log('⚠️ 验证未完成: ' + verdict);
   }
