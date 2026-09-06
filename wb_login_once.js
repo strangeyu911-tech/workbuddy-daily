@@ -71,6 +71,23 @@ function printNetHelp() {
   console.error('   若确实需要代理才能访问，加参数: node wb_login_once.js --proxy=127.0.0.1:端口');
 }
 
+// 在**当前已打开的浏览器**里新开标签验证（不关闭浏览器）
+// 用途：区分「登录是否成功」与「登录态是否持久化」—— 两者失败原因完全不同
+async function verifyInContext(context) {
+  let page;
+  try {
+    page = await context.newPage();
+    await page.goto(GROWTH, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    try { await page.waitForLoadState('networkidle', { timeout: 8000 }); } catch (e) { /* SPA 可能一直有请求 */ }
+    await sleep(2500);
+    return /\/login/.test(page.url()) ? 'not-logged-in' : 'logged-in';
+  } catch (e) {
+    return 'error:' + String(e.message || e).split('\n')[0];
+  } finally {
+    try { if (page) await page.close(); } catch (e) {}
+  }
+}
+
 // 权威验证：headless 打开成长中心，看是否仍被 302 到登录页
 // 失败会自动重试一次（上一个浏览器刚退出时 profile 可能还没释放干净）
 async function verifyLogin() {
@@ -203,19 +220,49 @@ async function verifyLogin() {
     await sleep(2000);
   }
 
-  if (outcome === 'timeout') console.log('\n⏱ 等待超时（' + WAIT_MIN + ' 分钟）。');
-  else if (outcome === 'closed') console.log('\n👋 检测到浏览器已关闭。');
-  else console.log('\n✅ 检测到页面已离开登录页。');
+  let inCtxVerdict = null;
+  if (outcome === 'timeout') {
+    console.log('\n⏱ 等待超时（' + WAIT_MIN + ' 分钟）。');
+  } else if (outcome === 'closed') {
+    console.log('\n👋 检测到浏览器已关闭。');
+  } else {
+    console.log('\n✅ 检测到页面已离开登录页。');
+    // 关键：绝对不能立刻关浏览器。刚登录完 cookie 还在内存里，close 太快会来不及落盘，
+    // 表现就是「明明扫码登录成功了，重开浏览器却还是未登录」。
+    console.log('   等待 8 秒让登录态写入磁盘…');
+    await sleep(8000);
+    console.log('   在当前浏览器内复验…');
+    inCtxVerdict = await verifyInContext(context);
+    if (inCtxVerdict === 'logged-in') {
+      console.log('   ✓ 当前浏览器内可直接进入成长中心');
+      await sleep(2000); // 再给一点时间确保 cookie 完全落盘
+    } else if (inCtxVerdict === 'not-logged-in') {
+      console.log('   ⚠️ 页面虽已跳转，但成长中心仍要求登录。');
+      console.log('   浏览器**保持打开** —— 请在窗口里手动打开成长中心看看；确认后关闭窗口即可。');
+      while (Date.now() < deadline && !closed) await sleep(2000);
+    } else {
+      console.log('   ⚠️ 浏览器内复验未能完成: ' + inCtxVerdict);
+    }
+  }
 
   try { await context.close(); } catch (e) {}
+  await sleep(1500);
+  killStaleEdge(); // 确保 headless 复验能独占 profile
   await sleep(1000);
 
-  console.log('[5/5] 用 headless 复验登录态…');
+  console.log('[5/5] 关闭浏览器后重新验证（检验登录态是否真正**持久化**）…');
   const verdict = await verifyLogin();
   if (verdict === 'logged-in') {
-    console.log('✅ 登录态有效 —— 成长中心可直接进入，每日派猫自动化可正常运行。');
+    console.log('✅ 登录态已持久化 —— 重开浏览器仍有效，每日派猫自动化可正常运行。');
   } else if (verdict === 'not-logged-in') {
-    console.log('❌ 仍未登录 —— 成长中心被重定向到登录页，请重跑本脚本完成登录。');
+    if (inCtxVerdict === 'logged-in') {
+      console.log('❌ 登录**成功了**，但登录态**没能持久化** —— 浏览器一关就失效。');
+      console.log('   也就是 cookie 还在内存里就被关掉了，或它是会话级 cookie。');
+      console.log('   这意味着每日自动化（每次新开浏览器）仍会 login:false。');
+      console.log('   处理：重跑本脚本，扫完码后**别手动关窗口**，让脚本自己收尾。');
+    } else {
+      console.log('❌ 仍未登录 —— 成长中心被重定向到登录页，请重跑本脚本完成登录。');
+    }
   } else if (verdict.startsWith('network-error')) {
     console.log('⚠️ 复验这一步没能完成: ' + verdict.slice('network-error:'.length));
     console.log('   这多半与登录无关 —— 常见原因是上一步的浏览器刚退出、profile 还没释放干净。');
