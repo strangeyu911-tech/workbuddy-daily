@@ -9,18 +9,27 @@
 //      2) 成功判据改为「页面 URL 真正离开 /login」，cookie 只作参考；
 //      3) 收尾时用 headless 打开成长中心做一次权威验证（是否仍被 302 到登录页），
 //         把「网络不通」和「没登录」分开报告。
+//   v4 修正：
+//      4) 网络预检不再硬中止 —— 在某些受限终端（如自动化沙箱）里探测必然失败，
+//         但用户本机网络是好的，硬中止反而挡住了正常流程。改为仅警告（--strict 才中止）。
+//      5) 新增 --fresh：把旧 profile 改名备份后用全新目录，一键排除 profile 层面的疑难杂症。
+//      6) 打开页面后打印实际 URL / 标题 / HTTP 状态，便于一眼看出卡在哪一步。
 //
 // 用法:
 //   node wb_login_once.js                 # 打开可见 Edge，登录后自动收尾（默认 8 分钟）
 //   node wb_login_once.js --timeout=15    # 自定义等待分钟数
 //   node wb_login_once.js --probe         # 只做网络预检，不启动浏览器
-//   node wb_login_once.js --force         # 网络预检不通也继续打开浏览器
+//   node wb_login_once.js --fresh         # 备份旧 profile，用全新目录重来
+//   node wb_login_once.js --proxy=host:port  # 让浏览器走指定代理
+//   node wb_login_once.js --strict        # 网络预检失败即中止（默认只警告）
+//   node wb_login_once.js --force         # 同义于忽略预检警告（保留兼容）
 
+const fs = require("fs");
 const path = require('path');
 const { chromium } = require('C:/Users/23159/.workbuddy/binaries/node/workspace/node_modules/playwright-core');
 
 const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const PROFILE = path.join(__dirname, 'wb_auto_profile_edge');
+let PROFILE = path.join(__dirname, 'wb_auto_profile_edge');
 const LOGIN = 'https://www.workbuddy.cn/login/?platform=usercenter&redirect_uri=https%3A%2F%2Fwww.workbuddy.cn%2Fprofile%2Fgrowth-center';
 const GROWTH = 'https://www.workbuddy.cn/profile/growth-center';
 
@@ -55,10 +64,11 @@ async function netProbe() {
 }
 
 function printNetHelp() {
-  console.error('   network unreachable —— 浏览器打开也只会一直转圈。请先排查：');
-  console.error('   1) 代理/梯子软件是否在运行（本机系统代理曾指向 127.0.0.1:51081，当前无进程监听）');
-  console.error('   2) 网卡 DNS 是否为 8.8.8.8 —— 境内直连该 DNS 易被污染，建议改为 223.5.5.5 / 119.29.29.29');
-  console.error('   3) 若只想让浏览器走代理，可加参数: node wb_login_once.js --proxy=127.0.0.1:端口');
+  console.error('   注意：探测失败**不一定**代表你上不了网 —— 若本脚本运行在受限终端');
+  console.error('   （如自动化沙箱、容器内），出网本身就被限制，浏览器也会跟着失败。');
+  console.error('   判断方法：用你平时那个 Edge 直接打开 https://www.workbuddy.cn/ 看是否正常。');
+  console.error('   若本机浏览器正常，请改在**自己打开的 CMD / PowerShell 窗口**里运行本脚本。');
+  console.error('   若确实需要代理才能访问，加参数: node wb_login_once.js --proxy=127.0.0.1:端口');
 }
 
 // 权威验证：headless 打开成长中心，看是否仍被 302 到登录页
@@ -96,18 +106,29 @@ async function verifyLogin() {
   } else {
     console.error('    ✗ 连续 3 次探测失败');
     printNetHelp();
-    if (has('--probe')) process.exit(2);
-    if (!has('--force')) {
-      console.error('\n中止。若确认是探测误报，加 --force 强制继续。');
-      process.exit(2);
-    }
-    console.log('    （--force 已指定，继续打开浏览器）');
+    console.error('\n⚠️ 仅警告，继续打开浏览器（预检失败可能是终端环境受限，不代表你上不了网）');
+    if (has('--strict')) { console.error('   --strict 已指定，中止。'); process.exit(2); }
   }
-  if (has('--probe')) { console.log('probe 模式结束。'); process.exit(0); }
+  if (has('--probe')) { console.log('probe 模式结束。'); process.exit(probe.ok ? 0 : 2); }
 
   console.log('[1/5] 清理占用自动化 profile 的遗留 Edge 进程…');
   killStaleEdge();
   await sleep(1500);
+
+  // --fresh：旧 profile 改名备份，用全新目录重来，排除 profile 层面的疑难杂症
+  if (has('--fresh')) {
+    if (fs.existsSync(PROFILE)) {
+      const bak = PROFILE + '.bak.' + Date.now();
+      try {
+        fs.renameSync(PROFILE, bak);
+        console.log('    ✓ 已备份旧 profile → ' + path.basename(bak));
+      } catch (e) {
+        console.error('    ✗ 备份失败（可能有 Edge 仍占用该目录）: ' + e.message);
+        process.exit(1);
+      }
+    }
+    console.log('    ✓ 将使用全新的空 profile');
+  }
 
   console.log('[2/5] 启动 Edge（专用 profile，可见窗口）…');
   const proxyArg = argv.find(x => x.startsWith('--proxy='));
@@ -139,11 +160,13 @@ async function verifyLogin() {
   console.log('[3/5] 打开登录页…');
   let loaded = false;
   try {
-    await page.goto(LOGIN, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    const resp = await page.goto(LOGIN, { waitUntil: 'domcontentloaded', timeout: 45000 });
     loaded = true;
-    console.log('    ✓ 登录页已加载');
+    console.log('    ✓ 已加载  HTTP ' + (resp && resp.status()) + '  URL: ' + page.url());
+    console.log('      标题: ' + (await page.title().catch(() => '(读取失败)')));
   } catch (e) {
     console.error('    ⚠️ 登录页加载失败: ' + String(e.message || e).split('\n')[0]);
+    console.error('      当前 URL: ' + page.url());
     printNetHelp();
     console.error('    （浏览器仍然可用，可手动在地址栏访问 https://www.workbuddy.cn/login）');
   }
