@@ -11,6 +11,20 @@
 
 ## 用法
 
+> ### ⭐ 推荐用法：让 WorkBuddy 自己搞定
+>
+> 不用你记命令、也不用手动配调度。把这段话直接甩给 WorkBuddy：
+>
+> > 帮我装上 WorkBuddy Daily（这个仓库），把 **WorkBuddy 客户端设置为开机自启**，
+> > 并把 **自动签到**（`wb_checkin.js --checkin`）和 **自动派猫**（`wb_auto_task.js`）
+> > **设置为定时自动化任务**，每天到点自己跑。
+>
+> 它会替你完成：装依赖 → 导入 `disable_edge_abe.reg` → 登录一次 → 建自动化任务。
+> 配完之后唯一要你自己做的事就是**保持客户端开机自启**，剩下的每天全自动：到点签到领积分、派猫猫去旅行。
+> 中途登录态过期了，就再跟它说一句「猫派不出去了，重新登录一下」。
+
+### 手动运行
+
 ```bash
 # ① 签到（--status 只查询不领取，--checkin 才真正领取）
 node wb_checkin.js --checkin
@@ -37,6 +51,8 @@ node wb_auto_task.js
 - `login:false` → Edge 专用 profile 登录态过期 → 跑一次 `node wb_login_once.js` 重新登录
 
 ## 首次部署
+
+> 走了上面的「推荐用法」的话，这三步 WorkBuddy 已经替你跑完了，这里只是留档说明每一步在做什么。
 
 1. 装依赖（Playwright core，走本地 playwright-core，无需下载浏览器）：
    ```bash
