@@ -1,9 +1,9 @@
 // 诊断2：取出 session cookie 值，用 curl 等价请求验证服务端是否认这个登录态
-const { chromium } = require('C:/Users/23159/.workbuddy/binaries/node/workspace/node_modules/playwright-core');
+const { chromium } = require('./wb_paths').playwright();
 const { spawn } = require('child_process');
 
-const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const PROFILE = 'C:/Users/23159/WorkBuddy/2026-08-15-22-57-14/wb_auto_profile_edge';
+const EDGE = require('./wb_paths').edge();
+const PROFILE = require('./wb_paths').profile();
 const CDP_URL = 'http://127.0.0.1:9223';
 const GROWTH = 'https://www.workbuddy.cn/profile/growth-center';
 const sleep = ms => new Promise(r => setTimeout(r, ms));

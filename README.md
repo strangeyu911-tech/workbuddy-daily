@@ -82,6 +82,25 @@ node wb_auto_task.js
 
 ## 环境
 
-- Windows + Edge
+- Windows + Edge（macOS / Linux 也能跑，路径会自动探测）
 - Node 22+（`fetch` 原生可用）
-- 路径目前写死为本机路径，换机器需改 `EDGE` / `PROFILE` 常量
+- `playwright-core`（`npm i playwright-core`）
+
+### 路径是自动探测的
+
+机器相关的路径 —— Edge 可执行文件、浏览器 profile、playwright-core、node.exe ——
+全部由 [`wb_paths.js`](wb_paths.js) 自动探测，**仓库里不写死任何本机路径**，clone 下来就能跑。
+
+优先级（高 → 低）：
+
+| 级别 | 方式 | 说明 |
+| --- | --- | --- |
+| 1 | 环境变量 `WB_EDGE` / `WB_PROFILE` / `WB_PLAYWRIGHT` / `WB_NODE` | 临时改一次用 |
+| 2 | `local.config.js` | **不提交**（已 gitignore），从 `local.config.example.js` 复制。想永久钉死自己的路径就写这儿 |
+| 3 | 自动探测 | 按平台枚举常见安装位置，找不到再退到 PATH |
+
+换机器后想确认探测得对不对：
+
+```bash
+node wb_paths.js     # 打印 edge / profile / playwright / node 的最终解析结果
+```

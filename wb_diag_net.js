@@ -7,9 +7,9 @@
 // 每个配置分别测 http / 国内域名 / 目标域名，从结果即可判断是代理错、DNS 错还是 SSL 错。
 //
 // 用法: node wb_diag_net.js
-const { chromium } = require('C:/Users/23159/.workbuddy/binaries/node/workspace/node_modules/playwright-core');
+const { chromium } = require('./wb_paths').playwright();
 
-const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
+const EDGE = require('./wb_paths').edge();
 const TARGETS = [
   'http://www.baidu.com',            // http（排除 HTTPS/证书因素）
   'https://www.baidu.com',           // https 国内站

@@ -27,11 +27,11 @@
 
 const fs = require("fs");
 const path = require('path');
-const { chromium } = require('C:/Users/23159/.workbuddy/binaries/node/workspace/node_modules/playwright-core');
+const { chromium } = require('./wb_paths').playwright();
 const { spawn } = require('child_process');
 
-const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const PROFILE = path.join(__dirname, 'wb_auto_profile_edge');
+const EDGE = require('./wb_paths').edge();
+const PROFILE = require('./wb_paths').profile();
 const CDP_PORT = 9223;
 const CDP_URL = 'http://127.0.0.1:' + CDP_PORT;
 const LOGIN = 'https://www.workbuddy.cn/login/?platform=usercenter&redirect_uri=https%3A%2F%2Fwww.workbuddy.cn%2Fprofile%2Fgrowth-center';

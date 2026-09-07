@@ -29,11 +29,11 @@
 //   node wb_auto_task.js            # 正常跑任务（复用/拉起常驻窗口）
 //   node wb_auto_task.js --kill     # 任务结束后关掉常驻 Edge（偶尔想彻底清理时用）
 
-const { chromium } = require('C:/Users/23159/.workbuddy/binaries/node/workspace/node_modules/playwright-core');
+const { chromium } = require('./wb_paths').playwright();
 const { spawn } = require('child_process');
 
-const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const PROFILE = 'C:/Users/23159/WorkBuddy/2026-08-15-22-57-14/wb_auto_profile_edge';
+const EDGE = require('./wb_paths').edge();
+const PROFILE = require('./wb_paths').profile();
 const CDP_PORT = 9223;
 const CDP_URL = 'http://127.0.0.1:' + CDP_PORT;
 const GROWTH = 'https://www.workbuddy.cn/profile/growth-center';

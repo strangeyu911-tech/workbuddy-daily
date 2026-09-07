@@ -1,7 +1,7 @@
 // 诊断：点击派猫按钮后，是否出现二次确认弹窗/模态框，并尝试完成派遣
-const { chromium } = require('C:/Users/23159/.workbuddy/binaries/node/workspace/node_modules/playwright-core');
-const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const PROFILE = 'C:/Users/23159/WorkBuddy/2026-08-15-22-57-14/wb_auto_profile_edge';
+const { chromium } = require('./wb_paths').playwright();
+const EDGE = require('./wb_paths').edge();
+const PROFILE = require('./wb_paths').profile();
 const GROWTH = 'https://www.workbuddy.cn/profile/growth-center';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 function killStaleEdge() {

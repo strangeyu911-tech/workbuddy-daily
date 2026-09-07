@@ -1,7 +1,7 @@
 // 只读诊断：仅读取派猫猫旅行按钮真实状态，不点击、无副作用
-const { chromium } = require('C:/Users/23159/.workbuddy/binaries/node/workspace/node_modules/playwright-core');
-const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const PROFILE = 'C:/Users/23159/WorkBuddy/2026-08-15-22-57-14/wb_auto_profile_edge';
+const { chromium } = require('./wb_paths').playwright();
+const EDGE = require('./wb_paths').edge();
+const PROFILE = require('./wb_paths').profile();
 const GROWTH = 'https://www.workbuddy.cn/profile/growth-center';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 function killStaleEdge() {

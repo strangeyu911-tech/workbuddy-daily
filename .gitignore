@@ -1,6 +1,10 @@
 # ⚠️ 浏览器登录 profile —— 含真实登录 cookie / session，绝不可提交
 wb_auto_profile_edge/
 
+# 本机专属路径覆盖（含用户名等个人信息，也不该进公开仓库）
+# 仓库里只提交模板 local.config.example.js
+local.config.js
+
 # WorkBuddy 项目数据与自动化执行记录（含个人信息）
 .workbuddy/
 

@@ -1,9 +1,9 @@
 // 诊断3：加载成长中心时监听全部网络响应，找出判定登录态的接口（401/403/重定向）
-const { chromium } = require('C:/Users/23159/.workbuddy/binaries/node/workspace/node_modules/playwright-core');
+const { chromium } = require('./wb_paths').playwright();
 const { spawn } = require('child_process');
 
-const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const PROFILE = 'C:/Users/23159/WorkBuddy/2026-08-15-22-57-14/wb_auto_profile_edge';
+const EDGE = require('./wb_paths').edge();
+const PROFILE = require('./wb_paths').profile();
 const CDP_URL = 'http://127.0.0.1:9223';
 const GROWTH = 'https://www.workbuddy.cn/profile/growth-center';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
