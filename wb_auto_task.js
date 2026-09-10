@@ -98,7 +98,23 @@ async function getTravelBtn(page, wait = 25000) {
     page = await context.newPage();          // 新开一个 tab，跑完只关 tab
 
     // ---- 进入成长中心（验证登录态）----
-    await page.goto(GROWTH, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // 冷启动兜底：常驻 Edge 当天首次拉起时，进程虽已监听 CDP 端口，但渲染/网络栈
+    // 尚未就绪，首次真实导航可能吃掉 30s 预算而超时（2026-09-10 19:00 复现，login:null）。
+    // 故做「最多 2 次」导航：首次超时则等 4s 让浏览器热身后重试，第二次基本必过。
+    let navOk = false;
+    for (let attempt = 0; attempt < 2 && !navOk; attempt++) {
+      try {
+        await page.goto(GROWTH, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        navOk = true;
+      } catch (e) {
+        if (attempt === 0) {
+          console.error('[i] 首次导航超时（疑似冷启动），等待浏览器热身后重试…');
+          await sleep(4000);
+        } else {
+          throw e;
+        }
+      }
+    }
     await sleep(4000);
 
     if (page.url().includes('/login')) {
