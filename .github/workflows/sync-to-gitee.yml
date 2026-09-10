@@ -20,8 +20,8 @@ jobs:
         with:
           # 源：整个 GitHub 账号（不填 static_list = 同步该账号下全部仓库，含未来新建的）
           src: github/strangeyu911-tech
-          # 目标：同名 Gitee 账号
-          dst: gitee/strangeyu911-tech
+          # 目标：Gitee 账号（注意：Gitee 用户名 strange_touchannel ≠ GitHub 名 strangeyu911-tech）
+          dst: gitee/strange_touchannel
           dst_key: ${{ secrets.GITEE_SSH_KEY }}      # Gitee SSH 私钥（公钥需先加到 Gitee SSH 公钥）
           dst_token: ${{ secrets.GITEE_TOKEN }}      # Gitee 私人令牌（用于 API 自动建仓）
           account_type: user
