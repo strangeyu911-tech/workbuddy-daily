@@ -1,0 +1,37 @@
+name: Sync to Gitee
+
+# 自动把 GitHub 账号下的仓库镜像到 Gitee（国内免梯可见）
+# 触发：push 到 main/master、删除分支、以及手动 Run workflow
+on:
+  push:
+    branches: [main, master]
+  delete:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    # 未配置 Gitee 密钥时跳过（避免每次 push 都报红）；配置后自动生效
+    if: ${{ secrets.GITEE_TOKEN != '' && secrets.GITEE_SSH_KEY != '' }}
+    steps:
+      - name: Mirror GitHub → Gitee (whole account)
+        uses: Yikun/hub-mirror-action@master
+        with:
+          # 源：整个 GitHub 账号（不填 static_list = 同步该账号下全部仓库，含未来新建的）
+          src: github/strangeyu911-tech
+          # 目标：同名 Gitee 账号
+          dst: gitee/strangeyu911-tech
+          dst_key: ${{ secrets.GITEE_SSH_KEY }}      # Gitee SSH 私钥（公钥需先加到 Gitee SSH 公钥）
+          dst_token: ${{ secrets.GITEE_TOKEN }}      # Gitee 私人令牌（用于 API 自动建仓）
+          account_type: user
+          force_update: true
+          # 私有仓库需额外 GitHub 权限才能读取，可选配置：
+          # src_token: ${{ secrets.GITHUB_PAT }}     # 有 repo 权限的 GitHub PAT（仅同步私有库时需要）
+        # 说明：
+        # 1) 默认会尝试同步全部 12 个仓库（含 1 个私有库 gh-push-test-tmp）。
+        #    私有库若未配 GITHUB_PAT 会跳过/失败——属预期，不影响 11 个公开库同步。
+        # 2) 若只想同步公开库，把上面 src/dst 之间加一行：
+        #    static_list: "workbuddy-daily,handoff-guard,aidy,Boy-Girl-friend-Copilot,trendforge-v2,AionsHome,InterPilot,culturelens,Boss-helper,TrendForge,LifeOS"
