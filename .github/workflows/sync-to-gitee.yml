@@ -14,8 +14,6 @@ permissions:
 jobs:
   mirror:
     runs-on: ubuntu-latest
-    # 未配置 Gitee 密钥时跳过（避免每次 push 都报红）；配置后自动生效
-    if: ${{ secrets.GITEE_TOKEN != '' && secrets.GITEE_SSH_KEY != '' }}
     steps:
       - name: Mirror GitHub → Gitee (whole account)
         uses: Yikun/hub-mirror-action@master
