@@ -20,7 +20,7 @@
 //                必须再点确认框服务端才真正派遣（曾因漏点确认框导致假成功，已修）
 //      旅行中  : 文案含「倒计时/回家/采风/旅行中」→ 猫在旅行，无需派遣（会自动回家）
 //      已回家  : 同可派遣态（每日限 1 次，派完按钮 disabled 显示"累啦，明天再来吧"）
-//      领礼物  : 文案含「领取/礼物」→ 猫已回家并带回奖励，先点领取，按钮回到「派猫猫旅行」可再派
+//      领礼物  : 文案含「领取/礼物」→ 猫已回家并带回奖励，先点领取（v3：轮询强校验 + 失败重试，见下），按钮回到「派猫猫旅行」可再派
 //  - Buddy 加油站签到 = 桌面端专属 + 服务端门控，web 自动化与客户端 CDP 均不可达，
 //    已移出本脚本，改为用户在桌面端每天点一次「立即领取」。
 //  - 稳健性：SPA 渲染偶发延迟，getTravelBtn 轮询最长 25s 等待按钮出现。
@@ -89,6 +89,84 @@ async function getTravelBtn(page, wait = 25000) {
   return null;
 }
 
+// 轮询等待页面内条件成立（返回第一个真值；超时返回 null）
+// 用来替代固定 sleep —— 页面渲染/接口耗时波动大，固定等待必然偶发漏步
+async function waitUntil(page, fn, timeout = 15000, interval = 500) {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) {
+    let v = null;
+    try { v = await page.evaluate(fn); } catch (e) { v = null; }
+    if (v) return v;
+    await sleep(interval);
+  }
+  return null;
+}
+
+// 读主按钮文案（不等待）
+async function readBtnText(page) {
+  return page.evaluate(() => {
+    const b = document.querySelector('button.gs-buddy-travel');
+    return b ? (b.innerText || '').replace(/\s+/g, ' ').trim() : null;
+  }).catch(() => null);
+}
+
+// 领取「回流礼物」：猫旅行回家带回的奖励，必须先领完，按钮才会回到「派猫猫旅行」
+// 成功判据：主按钮文案离开「领取」态（服务端真的把奖励结算了）
+// 失败最多重试 1 轮，全程把每一步记进 log，绝不静默吞异常
+async function claimGift(page) {
+  const log = [];
+  for (let round = 1; round <= 2; round++) {
+    log.push('r' + round + ':start=' + (await readBtnText(page)));
+    try {
+      await page.locator(TRAVEL_SEL).first().click({ timeout: 8000 });
+    } catch (e) {
+      log.push('r' + round + ':openFailed=' + e.message.split('\n')[0]);
+      continue;
+    }
+    // 等礼物弹窗出现（实测 ~300ms，负载高时会更久，不能固定 sleep）
+    if (!(await waitUntil(page, () => !!document.querySelector('.gs-modal-overlay'), 10000, 250))) {
+      log.push('r' + round + ':modalNotFound');
+      continue;
+    }
+    // 等弹窗内「领取 N 积分」按钮出现且可点
+    const claim = page.locator('.gs-modal-overlay').locator('button,[role=button]')
+      .filter({ hasText: /领取\s*\d+\s*积分/ }).first();
+    let ready = false;
+    const cEnd = Date.now() + 8000;
+    while (Date.now() < cEnd) {
+      if (await claim.count() && await claim.isEnabled().catch(() => false)) { ready = true; break; }
+      await sleep(250);
+    }
+    if (!ready) { log.push('r' + round + ':claimBtnNotReady'); continue; }
+    await claim.click({ timeout: 6000 });
+    log.push('r' + round + ':claimClicked');
+
+    // 关键：等领取请求真正落地再动页面。
+    // 领取中按钮会变成「领取中…」并 disabled；成功后弹窗自动关闭、主按钮回到「派猫猫旅行」。
+    // 旧版在这里 sleep(1500) 就 page.goto 刷新，把还没完成的领取请求打断 —— 本次故障根因。
+    const changed = await waitUntil(page, () => {
+      const b = document.querySelector('button.gs-buddy-travel');
+      const t = b ? (b.innerText || '').replace(/\s+/g, ' ').trim() : '';
+      return (t && !/领取/.test(t)) ? t : null;
+    }, 20000, 500);
+    if (changed) { log.push('r' + round + ':ok=' + changed); return { ok: true, txt: changed, log }; }
+
+    // 兜底 1：关掉弹窗再看一次
+    log.push('r' + round + ':notChangedAfterClaim');
+    await page.keyboard.press('Escape').catch(() => {});
+    await sleep(1500);
+    const afterEsc = await readBtnText(page);
+    if (afterEsc && !/领取/.test(afterEsc)) { log.push('r' + round + ':okAfterEsc=' + afterEsc); return { ok: true, txt: afterEsc, log }; }
+
+    // 兜底 2：整页刷新重读（此时领取请求早已结束，不会再被打断）
+    try { await page.goto(GROWTH, { waitUntil: 'domcontentloaded', timeout: 30000 }); } catch (e) {}
+    const s = await getTravelBtn(page, 25000);
+    if (s && !/领取/.test(s.txt)) { log.push('r' + round + ':okAfterReload=' + s.txt); return { ok: true, txt: s.txt, log }; }
+    log.push('r' + round + ':stillGift=' + (s ? s.txt : 'no-btn'));
+  }
+  return { ok: false, log };
+}
+
 (async () => {
   const res = { login: null, catTravel: null, note: '', mode: null, error: null };
   let browser, page;
@@ -130,31 +208,32 @@ async function getTravelBtn(page, wait = 25000) {
       } else {
         let { btn, txt } = state;
 
-        // ---- 领礼物态：猫已回家并带回奖励 → 开弹窗领积分 → 刷新使按钮回到「派猫猫旅行」----
+        // ---- 领礼物态：猫已回家并带回奖励 → 必须真正领取成功，按钮才会回到「派猫猫旅行」----
+        let giftBlocked = false;
         if (/领取|礼物/.test(txt)) {
           const giftEnabled = await btn.isEnabled().catch(() => false);
-          if (giftEnabled) {
-            try {
-              await btn.click({ timeout: 6000 });                 // 开礼物弹窗
-              await sleep(2000);
-              const claim = page.locator('button,[role=button],a.btn,div.btn')
-                .filter({ hasText: /领取\s*\d+\s*积分/ }).first(); // 弹窗内「领取 5 积分」
-              if (await claim.count()) await claim.click({ timeout: 4000 }).catch(() => {});
-              await sleep(1500);
-              await page.keyboard.press('Escape').catch(() => {}); // 关闭弹窗
-              await sleep(1000);
-              await page.goto(GROWTH, { waitUntil: 'domcontentloaded', timeout: 30000 }); // 刷新回派遣态
-              await sleep(4000);
-              const s2 = await getTravelBtn(page);                 // 重新读取按钮态
-              if (s2) { btn = s2.btn; txt = s2.txt; res.note = '已领回流礼物奖励'; }
-            } catch (e) {}
-          } else {
+          if (!giftEnabled) {
             res.catTravel = 'gift-claim-disabled:' + txt;
+            giftBlocked = true;
+          } else {
+            const g = await claimGift(page);
+            res.giftLog = g.log;
+            const s2 = await getTravelBtn(page, 20000);   // 领完重读按钮态
+            if (s2) { btn = s2.btn; txt = s2.txt; }
+            if (!g.ok) {
+              giftBlocked = true;
+              res.catTravel = 'gift-claim-failed:' + txt;
+              res.note = '领取礼物未完成，已中止派遣（详见 giftLog）';
+            } else {
+              res.note = '已领取回流礼物奖励（服务端已结算，按钮离开领取态）';
+            }
           }
         }
 
         // ---- 状态机 ----
-        if (/倒计时|回家|采风|旅行中|距离/.test(txt)) {
+        if (giftBlocked) {
+          // 上面已给出明确结论，不再往下走（旧版会继续落到 unknown-state 并谎报已领礼物）
+        } else if (/倒计时|回家|采风|旅行中|距离/.test(txt)) {
           res.catTravel = 'already-traveling:' + txt; // 猫在旅行中，等自动回家即可
         } else if (/派|去旅行|派遣|出发|立即/.test(txt)) {
           const enabled = await btn.isEnabled().catch(() => false);
@@ -164,23 +243,32 @@ async function getTravelBtn(page, wait = 25000) {
           } else {
             try {
               await btn.click({ timeout: 6000 });
-              await sleep(1500);
-              // 主按钮点开后会出现二次确认弹窗（"想让 Buddy 今天去哪里逛逛？…确定派出"），
-              // 必须再点「确定派出」服务端才会真正派遣——这是之前假成功(root cause)漏掉的一步。
-              const confirmBtn = page.locator('button, [role="button"], a.btn, div.btn')
+              // 轮询等确认弹窗（渲染耗时波动，固定 sleep 会漏）
+              await waitUntil(page, () => !!document.querySelector('.gs-modal-overlay'), 8000, 250);
+              const scope = (await page.locator('.gs-modal-overlay').count())
+                ? page.locator('.gs-modal-overlay') : page;
+              const confirmBtn = scope.locator('button,[role=button],a.btn,div.btn')
                 .filter({ hasText: /确定派出|确定|确认|出发|去吧|开始旅行|立即出发|去旅行/ }).first();
               let confirmed = false;
-              if (await confirmBtn.count()) {
-                await confirmBtn.click({ timeout: 4000 });
-                confirmed = true;
+              const cfEnd = Date.now() + 8000;
+              while (Date.now() < cfEnd) {
+                if (await confirmBtn.count() && await confirmBtn.isEnabled().catch(() => false)) {
+                  await confirmBtn.click({ timeout: 5000 }).catch(() => {});
+                  confirmed = true;
+                  break;
+                }
+                await sleep(250);
               }
-              await sleep(6000); // 等派遣请求完成 + 状态刷新
-              // 复核最终状态：只有切到「旅行中/倒计时」才算真派成功（服务端已记录）
-              const s3 = await getTravelBtn(page);
-              const afterTxt = s3 ? s3.txt : '';
+              // 派遣同样是异步请求，等到按钮真的切到旅行态再判定（最长 20s）
+              const afterTxt = await waitUntil(page, () => {
+                const b = document.querySelector('button.gs-buddy-travel');
+                const t = b ? (b.innerText || '').replace(/\s+/g, ' ').trim() : '';
+                return /倒计时|回家|采风|旅行中|距离/.test(t) ? t : null;
+              }, 20000, 500) || (await readBtnText(page) || '');
               if (/倒计时|回家|采风|旅行中|距离/.test(afterTxt)) {
                 res.catTravel = 'dispatched:' + afterTxt;
-                res.note = confirmed ? '领礼物+主按钮+确认框完成派遣' : '主按钮点击后自动进入旅行态';
+                const tail = confirmed ? '主按钮+确认框完成派遣' : '点主按钮后自动进入旅行态';
+                res.note = res.note ? res.note + ' → ' + tail : tail;
               } else if (confirmed) {
                 res.catTravel = 'dispatched-unverified:' + afterTxt;
                 res.note = '已点确认框但状态未切到旅行态，请人工核对';
