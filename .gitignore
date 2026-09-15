@@ -16,3 +16,11 @@ node_modules/
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 桌面端 asar 逆向产物（反编译代码，体积大且有版权问题，只留本机）
+_asar_extract/
+_asar_full/
+_asar_main/
+_asar_files.txt
+_extracted/
+_hits_*.txt

@@ -1,4 +1,4 @@
-// 每日自动化任务（派猫猫旅行）—— Edge 常驻窗口 + CDP 附着版 v2
+// 每日自动化任务（派猫猫旅行）—— Edge 常驻窗口 + CDP 附着版 v3
 //
 // 迭代历史：
 //   v1 每次运行都 launchPersistentContext 新起一个 headless Edge，用完即杀。
@@ -24,6 +24,10 @@
 //  - Buddy 加油站签到 = 桌面端专属 + 服务端门控，web 自动化与客户端 CDP 均不可达，
 //    已移出本脚本，改为用户在桌面端每天点一次「立即领取」。
 //  - 稳健性：SPA 渲染偶发延迟，getTravelBtn 轮询最长 25s 等待按钮出现。
+//   v3 零扫码（2026-09-15）：SSO 会话失效时不再要求扫码，走 wb_session_bridge
+//      复刻桌面端「token→deviceCode→/console/client-login 换会话 cookie」的静默桥
+//      （已逆向桌面端 asar 并实测 302 种 cookie、200 回到成长中心）。
+//      桥失败才落回 wb_login_once.js 扫码兜底。从此重启/关窗都不再需要扫码。
 //
 // 用法:
 //   node wb_auto_task.js            # 正常跑任务（复用/拉起常驻窗口）
@@ -31,6 +35,7 @@
 
 const { chromium } = require('./wb_paths').playwright();
 const { spawn } = require('child_process');
+const bridge = require('./wb_session_bridge');
 
 const EDGE = require('./wb_paths').edge();
 const PROFILE = require('./wb_paths').profile();
@@ -196,9 +201,26 @@ async function claimGift(page) {
     await sleep(4000);
 
     if (page.url().includes('/login')) {
+      // ---- v3 零扫码：token → deviceCode → client-login 桥，静默换会话 ----
+      // 会话 cookie 是会话级的，Edge 进程重启即失效；桌面端每次都靠这个桥静默续会话。
+      // 这里复刻同一条链路（wb_session_bridge.js，2026-09-15 实测通过）：
+      //   POST copilot.tencent.com/v2/plugin/device/auth/code（Bearer+X-Refresh-Token）
+      //   → GET www.workbuddy.cn/console/client-login?code=xxx&target=/profile/growth-center
+      //   → 302 种 session cookie → 回到成长中心
+      try {
+        console.error('[i] SSO 会话失效，走 client-login 桥静默换会话（零扫码）…');
+        const loginUrl = await bridge.getClientLoginUrl('/profile/growth-center');
+        await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await sleep(4000);
+      } catch (e) {
+        console.error('[i] 静默换会话失败: ' + String(e.message || e).split('\n')[0]);
+      }
+    }
+
+    if (page.url().includes('/login')) {
       res.login = false;
       res.catTravel = 'skipped: not logged in';
-      res.note = '成长中心 302 到登录页（SSO 会话失效）→ 直接运行 wb_login_once.js，会在常驻窗口里新开登录页重新登录';
+      res.note = '静默换会话失败（桌面端令牌可能过期，请打开 WorkBuddy 桌面端刷新）→ 落回扫码兜底：运行 wb_login_once.js 重新扫码';
     } else {
       res.login = true;
 
