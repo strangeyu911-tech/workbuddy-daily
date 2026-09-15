@@ -11,7 +11,7 @@
 | 步骤 | 脚本 | 原理 | 稳定性 |
 | --- | --- | --- | --- |
 | ① 加油站签到 | `wb_checkin.js --checkin` | 纯 API。读取本机桌面端登录态，直接调腾讯官方签到接口 | 稳定，免维护，幂等 |
-| ② 派猫猫旅行 | `wb_auto_task.js` | Playwright 驱动 Edge（专用 profile）点击成长中心的「派猫猫旅行」 | 登录态会过期，过期需重登 |
+| ② 派猫猫旅行 | `wb_auto_task.js` | Playwright 驱动 Edge（专用 profile）点击成长中心的「派猫猫旅行」 | v3 起会话失效自动经 client-login 桥静默恢复（零扫码），仅桌面端令牌双过期才需重登 |
 
 ## 用法
 
@@ -27,7 +27,8 @@
 > **时间是建自动化任务时你随口指定的**（脚本本身不带定时），想改直接在桌面端的自动化列表里改，
 > 或者跟 WorkBuddy 说一句「改成每天早上 9 点」。
 > 配完之后唯一要你自己做的事就是**保持客户端开机自启**，剩下的全自动：到点签到领积分、派猫猫去旅行。
-> 中途登录态过期了，就再跟它说一句「猫派不出去了，重新登录一下」。
+> Edge 重启/关窗导致的会话失效，派猫脚本会用桌面端令牌自动静默恢复（零扫码）；
+> 只有长期不开客户端导致令牌双双过期时，才需要跟它说一句「猫派不出去了，重新登录一下」。
 
 ### 手动运行
 
@@ -43,7 +44,7 @@ node wb_auto_task.js
 
 | 双击 | 作用 |
 | --- | --- |
-| `run_login.bat` | 登录一次 —— 登录态过期、派猫报 `login:false` 时用它 |
+| `run_login.bat` | 扫码登录兜底 —— 仅当派猫脚本的静默换会话桥也失败（桌面端令牌过期）时才需要 |
 | `run_cat.bat` | 派猫猫旅行 |
 
 ### 签到结果判定
@@ -55,7 +56,7 @@ node wb_auto_task.js
 - `login:true` + `catTravel` 以 `dispatched` 开头 → 派遣成功
 - `already-traveling` → 猫还在旅行中，跳过
 - `gift-claim-failed` → 礼物没领成功，本轮**不会**继续派遣（看 `giftLog` 定位）
-- `login:false` → Edge 专用 profile 登录态过期 → 跑一次 `node wb_login_once.js` 重新登录
+- `login:false` → 静默换会话桥也救不回来（桌面端令牌过期）→ 跑一次 `node wb_login_once.js` 重新扫码
 
 ### 排障脚本
 
@@ -71,6 +72,9 @@ node wb_diag_gift_flow.js    # 完整跑一遍领礼物流程，逐步输出耗�
 - [领礼物静默失败复盘（2026-09-13）](docs/postmortem-2026-09-13-gift-claim.md)
   —— 一次「note 说已领取、实际没领到」的伪装成功故障；顺带记了自动化脚本里为什么不该用固定 `sleep`、
   为什么不能写空 `catch`。
+- [派猫登录态根因与零扫码修复（2026-09-15）](docs/cat-travel-auth-rootcause.md)
+  —— 用 cookie 数据证实「登录态 = 进程在不在」，再从桌面端 asar 逆向出 token→session 桥端点，
+  彻底做到重启零扫码（含实测记录与遗留边界）。
 
 ## 首次部署
 
@@ -96,6 +100,7 @@ node wb_diag_gift_flow.js    # 完整跑一遍领礼物流程，逐步输出耗�
 - **SPA 渲染会延迟**。`getTravelBtn` 轮询最多 25s 等按钮出现，否则会误判 `no-travel-button`（成长中心实测约 5–10s 才渲染出按钮）。
 - **别用固定 `sleep` 等异步 UI**。凡是"点了之后再操作"的地方（礼物弹窗、派遣确认框）一律轮询等目标出现/可点，页面负载一波动固定等待必然偶发漏步。
 - **加油站签到是桌面端专属 + 服务端门控**，web 自动化和客户端 CDP 都够不着，所以拆成独立的纯 API 脚本。
+- **Edge 会话失效不用扫码（v3）**。SSO 会话 cookie 是会话级的，浏览器进程一关就焚。派猫脚本检测到 `login:false` 时会复刻桌面端的静默桥自救：用桌面端令牌调 `/v2/plugin/device/auth/code` 签发一次性 deviceCode（**必须带 `X-Refresh-Token`，否则 401**），再访问 `/console/client-login?code=xxx&target=...` 302 种回会话 cookie。端点逆向过程、实测记录与遗留边界见根因文档。
 
 ## 安全说明 🔒
 
