@@ -15,7 +15,11 @@ name: Sync to Gitee
 #   * 只用已有 secret：GITEE_TOKEN（建仓/改设置）、GITEE_SSH_KEY（推送）
 #     GitHub 侧只用 runner 自带的 GITHUB_TOKEN 读一个字段，不需要任何 PAT
 #   * 可见性自动对齐 GitHub：读 GitHub 的 private 字段再写回 Gitee，
-#     GitHub 上公开 → Gitee 上也公开，不靠人工同步
+#     GitHub 上公开 → Gitee 上也公开，不靠人工同步。
+#     注意必须分两阶段 —— Gitee 拒绝把「空仓库」设为公开
+#     （PATCH 返回 422「空仓库不支持设置为公开仓库」），
+#     所以顺序是「先建私有 → 推送内容 → 再改可见性」，
+#     脚本因此拆成 ensure / align 两个子命令
 #   * 任何一步失败都会让 job 真失败，不会再出现「绿色空转」
 #
 # ── 触发方式 ────────────────────────────────────────────────────────────────
@@ -50,11 +54,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 确保 Gitee 仓库存在，且可见性与 GitHub 一致
+      - name: 确保 Gitee 仓库存在（推送前）
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash .github/scripts/ensure-gitee-repo.sh "${GH_OWNER}" "${GITEE_OWNER}" "${GITHUB_REPOSITORY##*/}"
+        run: bash .github/scripts/ensure-gitee-repo.sh ensure "${GH_OWNER}" "${GITEE_OWNER}" "${GITHUB_REPOSITORY##*/}"
 
       - name: 配置 Gitee SSH 私钥
         env:
@@ -76,6 +80,12 @@ jobs:
           git push --force gitee --all
           git push --force gitee --tags
           echo "✅ ${REPO} 已同步到 gitee.com/${GITEE_OWNER}/${REPO}"
+
+      - name: 对齐可见性（推送后，空仓库不能设为公开）
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .github/scripts/ensure-gitee-repo.sh align "${GH_OWNER}" "${GITEE_OWNER}" "${GITHUB_REPOSITORY##*/}"
 
   mirror-all:
     name: 镜像 ${{ matrix.repo }}
@@ -104,11 +114,11 @@ jobs:
       - name: Checkout（取同步脚本）
         uses: actions/checkout@v4
 
-      - name: 确保 Gitee 仓库存在，且可见性与 GitHub 一致
+      - name: 确保 Gitee 仓库存在（推送前）
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash .github/scripts/ensure-gitee-repo.sh "${GH_OWNER}" "${GITEE_OWNER}" "${{ matrix.repo }}"
+        run: bash .github/scripts/ensure-gitee-repo.sh ensure "${GH_OWNER}" "${GITEE_OWNER}" "${{ matrix.repo }}"
 
       - name: 配置 Gitee SSH 私钥
         env:
@@ -130,3 +140,9 @@ jobs:
           git clone --bare "https://github.com/${GH_OWNER}/${REPO}.git" "/tmp/${REPO}.git"
           git -C "/tmp/${REPO}.git" push --mirror "git@gitee.com:${GITEE_OWNER}/${REPO}.git"
           echo "✅ ${REPO} 已同步到 gitee.com/${GITEE_OWNER}/${REPO}"
+
+      - name: 对齐可见性（推送后，空仓库不能设为公开）
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .github/scripts/ensure-gitee-repo.sh align "${GH_OWNER}" "${GITEE_OWNER}" "${{ matrix.repo }}"

@@ -87,7 +87,9 @@ node wb_diag_gift_flow.js    # 完整跑一遍领礼物流程，逐步输出耗�
 
 - **可见性自动跟随 GitHub**：由 [`ensure-gitee-repo.sh`](.github/scripts/ensure-gitee-repo.sh)
   读 GitHub 仓库的 `private` 字段再写回 Gitee —— GitHub 上公开，Gitee 上就公开，不靠人工同步；
-  已存在时只在可见性不一致时才改，避免无谓覆盖描述等其他设置。
+  已存在且已一致时不发任何写请求，避免无谓覆盖描述等其他设置。
+  注意顺序：Gitee **不允许把空仓库设为公开**（`422 空仓库不支持设置为公开仓库`），
+  所以脚本拆成 `ensure`（推送前建仓，一律先私有）和 `align`（推送后改可见性）两个阶段。
 - 手动 Run workflow 勾选 `include_all_repos`，会**并行**把 workflow 里 `matrix.repo` 名单中的所有仓库
   一并镜像（`fail-fast: false`，单个仓库失败不拖累其他）。
 - 只用三个凭据，且都是现成的：`GITEE_TOKEN`（建仓 / 改可见性）、`GITEE_SSH_KEY`（推送）、
