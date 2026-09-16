@@ -1,26 +1,27 @@
 name: Sync to Gitee
 
-# 把仓库镜像到 Gitee（国内免梯可见）。
+# 把仓库镜像到 Gitee（国内免梯可直接打开）。
 #
 # ── 为什么不再用 Yikun/hub-mirror-action（2026-09-16 重写）────────────────────
 # 旧版靠 hub-mirror 镜像「整个 GitHub 账号」，而它必须先调 GitHub API 列出
 # 账号下的仓库清单，这需要 src_token。该 secret 从未配置 → 请求走匿名 →
-# 撞上 GitHub 匿名限流（60 次/小时）→ 日志里 `Total: 0, successed: 0`
-# （一个仓库都没同步），但进程退出码仍是 0 → Actions 上显示绿色 ✓。
-# 实测 2026-09-13 之后实际战果为 0，是典型的「假成功」。
+# 撞上 GitHub 匿名限流（60 次/小时，runner 共享出口 IP 几乎必然耗尽）→
+# 日志里 `Total: 0, successed: 0`（一个仓库都没同步），但进程退出码仍是 0 →
+# Actions 上显示绿色 ✓。属于「抽奖式 + 静默」的假成功：成功与失败都不可信。
 #
-# ── 新版思路：纯 git 直推，完全不碰 GitHub API ──────────────────────────────
+# ── 新版思路：纯 git 直推，完全不碰 GitHub API 的仓库枚举 ────────────────────
 #   * 本仓库：workflow 自带 checkout，代码已在 runner 本地，直接 push 到 Gitee
-#   * 其他仓库：按下方 EXTRA_REPOS 清单匿名 clone（公开库不需要任何凭证）再 push
-#   * 只用已有的两个 secret：GITEE_TOKEN（建仓）、GITEE_SSH_KEY（推送）
-#   * **不需要任何 GitHub PAT**，因此不存在令牌轮换导致静默失效的问题
-#   * 限流与我们无关（git 协议不消耗 API 配额）
+#   * 其他仓库：按下方 matrix 名单匿名 clone（公开库不需要凭证）再 push
+#   * 只用已有 secret：GITEE_TOKEN（建仓/改设置）、GITEE_SSH_KEY（推送）
+#     GitHub 侧只用 runner 自带的 GITHUB_TOKEN 读一个字段，不需要任何 PAT
+#   * 可见性自动对齐 GitHub：读 GitHub 的 private 字段再写回 Gitee，
+#     GitHub 上公开 → Gitee 上也公开，不靠人工同步
 #   * 任何一步失败都会让 job 真失败，不会再出现「绿色空转」
 #
 # ── 触发方式 ────────────────────────────────────────────────────────────────
 #   * push 到 main/master → 只同步本仓库（秒级）
-#   * 手动 Run workflow，勾选 include_all_repos → 额外同步 EXTRA_REPOS 全部仓库
-#   * 新增仓库记得追加到 EXTRA_REPOS（纯名单，不写进去就不会被同步）
+#   * 手动 Run workflow，勾选 include_all_repos → 并行同步 matrix 里的全部仓库
+#   * 新增仓库需要追加到下方 matrix.repo 名单（这是本方案唯一的维护点）
 
 on:
   push:
@@ -28,7 +29,7 @@ on:
   workflow_dispatch:
     inputs:
       include_all_repos:
-        description: "同时镜像 EXTRA_REPOS 清单里的其他公开仓库（较慢）"
+        description: "同时镜像 matrix 名单里的其他公开仓库（会真的在 Gitee 建仓）"
         type: boolean
         default: false
 
@@ -38,8 +39,6 @@ permissions:
 env:
   GH_OWNER: strangeyu911-tech
   GITEE_OWNER: strange_touchannel
-  # 除本仓库外，勾选 include_all_repos 时需要一并镜像的公开仓库
-  EXTRA_REPOS: "trendforge-v2,culturelens,Resume-Matcher,aidy,LifeOS,Boss-helper,TrendForge,AionsHome,InterPilot,Boy-Girl-friend-Copilot,handoff-guard"
 
 jobs:
   mirror-self:
@@ -51,35 +50,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 确保 Gitee 侧仓库存在
+      - name: 确保 Gitee 仓库存在，且可见性与 GitHub 一致
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-        run: |
-          set -euo pipefail
-          REPO="${GITHUB_REPOSITORY##*/}"
-          API="https://gitee.com/api/v5"
-          code=$(curl -s -o /tmp/probe.json -w '%{http_code}' -H 'User-Agent: gitee-sync' \
-            "${API}/repos/${GITEE_OWNER}/${REPO}?access_token=${GITEE_TOKEN}")
-          echo "GET /repos/${GITEE_OWNER}/${REPO} → HTTP ${code}"
-          if [ "${code}" = "200" ]; then
-            echo "仓库已存在，跳过创建。"
-          else
-            echo "仓库不存在，调用 Gitee API 创建…"
-            curl -sS -X POST "${API}/user/repos" \
-              -H 'User-Agent: gitee-sync' \
-              --data-urlencode "access_token=${GITEE_TOKEN}" \
-              --data-urlencode "name=${REPO}" \
-              --data-urlencode "private=true" \
-              --data-urlencode "auto_init=false" \
-              --data-urlencode "description=Mirror of GitHub ${GITHUB_REPOSITORY}" \
-              -o /tmp/create.json -w 'create → HTTP %{http_code}\n'
-            head -c 400 /tmp/create.json; echo
-            # 复验，创建失败则直接让 job 挂掉（不再假装成功）
-            code2=$(curl -s -o /dev/null -w '%{http_code}' -H 'User-Agent: gitee-sync' \
-              "${API}/repos/${GITEE_OWNER}/${REPO}?access_token=${GITEE_TOKEN}")
-            echo "复验 GET → HTTP ${code2}"
-            [ "${code2}" = "200" ] || { echo "::error::Gitee 仓库创建失败，请检查 GITEE_TOKEN 是否具备 projects 权限"; exit 1; }
-          fi
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .github/scripts/ensure-gitee-repo.sh "${GH_OWNER}" "${GITEE_OWNER}" "${GITHUB_REPOSITORY##*/}"
 
       - name: 配置 Gitee SSH 私钥
         env:
@@ -89,7 +64,7 @@ jobs:
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "${SSH_KEY}" > ~/.ssh/gitee_key
           chmod 600 ~/.ssh/gitee_key
-          echo "私钥已写入（长度 $(wc -c < ~/.ssh/gitee_key) 字节）"
+          echo "私钥已写入（$(wc -c < ~/.ssh/gitee_key) 字节）"
 
       - name: 推送 main 与 tag 到 Gitee
         env:
@@ -103,11 +78,38 @@ jobs:
           echo "✅ ${REPO} 已同步到 gitee.com/${GITEE_OWNER}/${REPO}"
 
   mirror-all:
-    name: 镜像其他仓库（手动）
+    name: 镜像 ${{ matrix.repo }}
     needs: mirror-self
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.include_all_repos == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false      # 一个仓库失败不影响其他仓库
+      max-parallel: 2       # 别把 Gitee 的建仓接口打爆
+      matrix:
+        repo:
+          - trendforge-v2
+          - wx-assist
+          - codex-auto-runner
+          - Resume-Matcher
+          - handoff-guard
+          - aidy
+          - Boy-Girl-friend-Copilot
+          - AionsHome
+          - culturelens
+          - Boss-helper
+          - TrendForge
+          - LifeOS
+          - InterPilot
     steps:
+      - name: Checkout（取同步脚本）
+        uses: actions/checkout@v4
+
+      - name: 确保 Gitee 仓库存在，且可见性与 GitHub 一致
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .github/scripts/ensure-gitee-repo.sh "${GH_OWNER}" "${GITEE_OWNER}" "${{ matrix.repo }}"
+
       - name: 配置 Gitee SSH 私钥
         env:
           SSH_KEY: ${{ secrets.GITEE_SSH_KEY }}
@@ -117,46 +119,14 @@ jobs:
           printf '%s\n' "${SSH_KEY}" > ~/.ssh/gitee_key
           chmod 600 ~/.ssh/gitee_key
 
-      - name: 逐个克隆并推送到 Gitee
+      - name: 裸克隆 GitHub 并推送到 Gitee
         env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GIT_SSH_COMMAND: "ssh -i ~/.ssh/gitee_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
         run: |
-          set -uo pipefail
-          API="https://gitee.com/api/v5"
-          failed=""
-          for REPO in $(echo "${EXTRA_REPOS}" | tr ',' ' '); do
-            echo "──────── ${REPO} ────────"
-            # 1) 确保 Gitee 仓库存在
-            code=$(curl -s -o /dev/null -w '%{http_code}' -H 'User-Agent: gitee-sync' \
-              "${API}/repos/${GITEE_OWNER}/${REPO}?access_token=${GITEE_TOKEN}")
-            if [ "${code}" != "200" ]; then
-              curl -sS -X POST "${API}/user/repos" -H 'User-Agent: gitee-sync' \
-                --data-urlencode "access_token=${GITEE_TOKEN}" \
-                --data-urlencode "name=${REPO}" \
-                --data-urlencode "private=false" \
-                --data-urlencode "auto_init=false" \
-                -o /dev/null -w '  建仓 → HTTP %{http_code}\n'
-            else
-              echo "  仓库已存在"
-            fi
-            # 2) 匿名裸克隆（公开库无需凭证，不消耗 API 配额）
-            rm -rf "/tmp/${REPO}.git"
-            if ! git clone --bare --quiet "https://github.com/${GH_OWNER}/${REPO}.git" "/tmp/${REPO}.git"; then
-              echo "  ::error::克隆失败（仓库不存在 / 已改名 / 非公开），跳过"
-              failed="${failed} ${REPO}(clone)"
-              continue
-            fi
-            # 3) 推送到 Gitee
-            if git -C "/tmp/${REPO}.git" push --mirror --quiet "git@gitee.com:${GITEE_OWNER}/${REPO}.git"; then
-              echo "  ✅ 已同步"
-            else
-              echo "  ::error::推送失败"
-              failed="${failed} ${REPO}(push)"
-            fi
-          done
-          if [ -n "${failed}" ]; then
-            echo "::error::以下仓库同步失败：${failed}"
-            exit 1
-          fi
-          echo "🎉 EXTRA_REPOS 全部同步完成"
+          set -euo pipefail
+          REPO="${{ matrix.repo }}"
+          rm -rf "/tmp/${REPO}.git"
+          # 公开库匿名克隆即可，不消耗 GitHub API 配额
+          git clone --bare "https://github.com/${GH_OWNER}/${REPO}.git" "/tmp/${REPO}.git"
+          git -C "/tmp/${REPO}.git" push --mirror "git@gitee.com:${GITEE_OWNER}/${REPO}.git"
+          echo "✅ ${REPO} 已同步到 gitee.com/${GITEE_OWNER}/${REPO}"

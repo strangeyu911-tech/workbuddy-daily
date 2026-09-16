@@ -1,0 +1,2 @@
+# 保证 .sh 在 runner 上一定是 LF —— 带 \r 的 shell 脚本会以诡异方式失败
+*.sh text eol=lf
