@@ -18,9 +18,17 @@ node_modules/
 Thumbs.db
 
 # 桌面端 asar 逆向产物（反编译代码，体积大且有版权问题，只留本机）
+# auth.js 是 asar 解包出的客户端入口，含第三方代码，绝不提交
 _asar_extract/
 _asar_full/
 _asar_main/
 _asar_files.txt
 _extracted/
 _hits_*.txt
+auth.js
+
+# 一次性诊断脚本与临时产物（2026-09-14 逆向期间产出，绑死本机绝对路径，无复用价值）
+# 注意：仓库里有意保留的是 wb_diag_*.js（派猫流程排障，见 README）
+_diag_*.js
+_monitor_growth.ps1
+_edge_cmds.txt
