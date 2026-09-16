@@ -69,7 +69,7 @@ jobs:
               -H 'User-Agent: gitee-sync' \
               --data-urlencode "access_token=${GITEE_TOKEN}" \
               --data-urlencode "name=${REPO}" \
-              --data-urlencode "private=false" \
+              --data-urlencode "private=true" \
               --data-urlencode "auto_init=false" \
               --data-urlencode "description=Mirror of GitHub ${GITHUB_REPOSITORY}" \
               -o /tmp/create.json -w 'create → HTTP %{http_code}\n'

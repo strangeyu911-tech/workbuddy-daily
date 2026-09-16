@@ -80,6 +80,21 @@ node wb_diag_gift_flow.js    # 完整跑一遍领礼物流程，逐步输出耗�
   —— 用 cookie 数据证实「登录态 = 进程在不在」，再从桌面端 asar 逆向出 token→session 桥端点，
   彻底做到重启零扫码（含实测记录与遗留边界）。
 
+## 仓库镜像到 Gitee 🔁
+
+[`.github/workflows/sync-to-gitee.yml`](.github/workflows/sync-to-gitee.yml) 把本仓库镜像到
+<https://gitee.com/strange_touchannel/workbuddy-daily>（**私有库**，国内免梯可直接打开）。push 到 `main` 即自动触发，纯 git 直推，约 20 秒完成。
+
+- 只用两个 secret：`GITEE_TOKEN`（调 Gitee API 建仓）、`GITEE_SSH_KEY`（推送）。
+  **不需要任何 GitHub 侧令牌**，所以不存在「令牌被轮换 → 静默失效」的风险。
+- 手动 Run workflow 勾选 `include_all_repos`，可额外把 `EXTRA_REPOS` 名单里的其他公开仓库一起镜像
+  （新增仓库要手动追加进名单，不会再自动发现）。
+- **2026-09-16 重写原因**：旧版用 `Yikun/hub-mirror-action`，它必须先调 GitHub API 列出账号下的仓库清单，
+  这需要 `src_token`。该 secret 从未配置 → 请求走匿名 → 撞上 GitHub 匿名限流（60 次/小时）→
+  日志里 `Total: 0, successed: 0`（**一个仓库都没同步**），但退出码仍是 0 → Actions 上显示绿色 ✓。
+  实测同步是「时灵时不灵」的抽奖，且失败时**没有任何提示**。新版全程不碰 GitHub API（git 协议不消耗 API 配额），
+  任何一步失败都会让 job 真失败，不会再出现「绿色空转」。
+
 ## 首次部署
 
 > 走了上面的「推荐用法」的话，这三步 WorkBuddy 已经替你跑完了，这里只是留档说明每一步在做什么。
