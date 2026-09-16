@@ -1,4 +1,4 @@
-// 每日自动化任务（派猫猫旅行）—— Edge 常驻窗口 + CDP 附着版 v3
+// 每日自动化任务（派猫猫旅行）—— Edge 常驻窗口 + CDP 附着版 v4
 //
 // 迭代历史：
 //   v1 每次运行都 launchPersistentContext 新起一个 headless Edge，用完即杀。
@@ -29,6 +29,14 @@
 //      复刻桌面端「token→deviceCode→/console/client-login 换会话 cookie」的静默桥
 //      （已逆向桌面端 asar 并实测 302 种 cookie、200 回到成长中心）。
 //      桥失败才落回 wb_login_once.js 扫码兜底。从此重启/关窗都不再需要扫码。
+//   v4 整流程重试（2026-09-16）：把「进成长中心 → 验登录 → 判定猫状态 → 执行动作」
+//      抽成 runOnce()，外层最多跑 3 轮。原因：SPA 渲染抖动/冷启动竞态导致的
+//      no-travel-button / click-failed / dispatched-unverified 都是**瞬时**的，
+//      实测 2026-09-15、09-16 主任务每天都要人工复跑 1~2 次才派遣成功 —— 这类失败
+//      重载页面再来一轮基本必过。改完一次运行即自愈（不再依赖外层 agent 复跑），
+//      因此删除了 19:25 的「派猫补派兜底」自动化：它的前提「等用户扫码后重派」
+//      已被 v3 消灭（v3 后 login:false 只在桌面端令牌双过期时出现），而它 19:25
+//      跑时猫必在旅行中（19:00 派出、倒计时 1~4h），主任务成功时纯空转、白烧积分。
 //
 // 用法:
 //   node wb_auto_task.js            # 正常跑任务（复用/拉起常驻窗口）
@@ -46,6 +54,13 @@ const GROWTH = 'https://www.workbuddy.cn/profile/growth-center';
 const TRAVEL_SEL = 'button.gs-buddy-travel';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const KILL_AFTER = process.argv.includes('--kill');
+
+// ---- 整流程重试策略（v4）----
+const MAX_ROUNDS = 3;   // 含首次在内最多跑几轮
+// 已达目的：无需再重试
+const SETTLED = /^(dispatched:|already-traveling|already-dispatched-today)/;
+// 瞬时失败：重载页面再来一轮基本能过
+const RETRYABLE = /^(no-travel-button|click-failed|dispatched-unverified|gift-claim-failed|gift-claim-disabled|unknown-state)/;
 
 async function portAlive() {
   try {
@@ -173,140 +188,178 @@ async function claimGift(page) {
   return { ok: false, log };
 }
 
+// ---- 单轮流程：进成长中心 → 验登录（必要时静默换会话）→ 判定猫的状态并执行动作 ----
+// 抽成函数是为了外层能整流程重试；每轮开头都会重新 goto，天然完成「重载再试」。
+// 返回 { login, catTravel, note, giftLog }
+async function runOnce(page) {
+  const r = { login: null, catTravel: null, note: '', giftLog: null };
+
+  // ---- 进入成长中心（验证登录态）----
+  // 冷启动兜底：常驻 Edge 当天首次拉起时，进程虽已监听 CDP 端口，但渲染/网络栈
+  // 尚未就绪，首次真实导航可能吃掉 30s 预算而超时（2026-09-10 19:00 复现，login:null）。
+  // 故做「最多 2 次」导航：首次超时则等 4s 让浏览器热身后重试，第二次基本必过。
+  let navOk = false;
+  for (let attempt = 0; attempt < 2 && !navOk; attempt++) {
+    try {
+      await page.goto(GROWTH, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      navOk = true;
+    } catch (e) {
+      if (attempt === 0) {
+        console.error('[i] 首次导航超时（疑似冷启动），等待浏览器热身后重试…');
+        await sleep(4000);
+      } else {
+        throw e;
+      }
+    }
+  }
+  await sleep(4000);
+
+  if (page.url().includes('/login')) {
+    // ---- v3 零扫码：token → deviceCode → client-login 桥，静默换会话 ----
+    // 会话 cookie 是会话级的，Edge 进程重启即失效；桌面端每次都靠这个桥静默续会话。
+    // 这里复刻同一条链路（wb_session_bridge.js，2026-09-15 实测通过）：
+    //   POST copilot.tencent.com/v2/plugin/device/auth/code（Bearer+X-Refresh-Token）
+    //   → GET www.workbuddy.cn/console/client-login?code=xxx&target=/profile/growth-center
+    //   → 302 种 session cookie → 回到成长中心
+    try {
+      console.error('[i] SSO 会话失效，走 client-login 桥静默换会话（零扫码）…');
+      const loginUrl = await bridge.getClientLoginUrl('/profile/growth-center');
+      await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await sleep(4000);
+    } catch (e) {
+      console.error('[i] 静默换会话失败: ' + String(e.message || e).split('\n')[0]);
+    }
+  }
+
+  if (page.url().includes('/login')) {
+    r.login = false;
+    r.catTravel = 'skipped: not logged in';
+    r.note = '静默换会话失败（桌面端令牌可能过期，请打开 WorkBuddy 桌面端刷新）→ 落回扫码兜底：运行 wb_login_once.js 重新扫码';
+    return r;
+  }
+
+  r.login = true;
+  const state = await getTravelBtn(page);
+  if (!state) {
+    r.catTravel = 'no-travel-button';
+    return r;
+  }
+
+  let { btn, txt } = state;
+
+  // ---- 领礼物态：猫已回家并带回奖励 → 必须真正领取成功，按钮才会回到「派猫猫旅行」----
+  let giftBlocked = false;
+  if (/领取|礼物/.test(txt)) {
+    const giftEnabled = await btn.isEnabled().catch(() => false);
+    if (!giftEnabled) {
+      r.catTravel = 'gift-claim-disabled:' + txt;
+      giftBlocked = true;
+    } else {
+      const g = await claimGift(page);
+      r.giftLog = g.log;
+      const s2 = await getTravelBtn(page, 20000);   // 领完重读按钮态
+      if (s2) { btn = s2.btn; txt = s2.txt; }
+      if (!g.ok) {
+        giftBlocked = true;
+        r.catTravel = 'gift-claim-failed:' + txt;
+        r.note = '领取礼物未完成，已中止派遣（详见 giftLog）';
+      } else {
+        r.note = '已领取回流礼物奖励（服务端已结算，按钮离开领取态）';
+      }
+    }
+  }
+
+  // ---- 状态机 ----
+  if (giftBlocked) {
+    // 上面已给出明确结论，不再往下走（旧版会继续落到 unknown-state 并谎报已领礼物）
+  } else if (/倒计时|回家|采风|旅行中|距离/.test(txt)) {
+    r.catTravel = 'already-traveling:' + txt; // 猫在旅行中，等自动回家即可
+  } else if (/派|去旅行|派遣|出发|立即/.test(txt)) {
+    const enabled = await btn.isEnabled().catch(() => false);
+    if (!enabled) {
+      r.catTravel = 'already-dispatched-today:' + txt;
+      r.note = '今日已派猫猫旅行（按钮 disabled），明天 0 点重置';
+    } else {
+      try {
+        await btn.click({ timeout: 6000 });
+        // 轮询等确认弹窗（渲染耗时波动，固定 sleep 会漏）
+        await waitUntil(page, () => !!document.querySelector('.gs-modal-overlay'), 8000, 250);
+        const scope = (await page.locator('.gs-modal-overlay').count())
+          ? page.locator('.gs-modal-overlay') : page;
+        const confirmBtn = scope.locator('button,[role=button],a.btn,div.btn')
+          .filter({ hasText: /确定派出|确定|确认|出发|去吧|开始旅行|立即出发|去旅行/ }).first();
+        let confirmed = false;
+        const cfEnd = Date.now() + 8000;
+        while (Date.now() < cfEnd) {
+          if (await confirmBtn.count() && await confirmBtn.isEnabled().catch(() => false)) {
+            await confirmBtn.click({ timeout: 5000 }).catch(() => {});
+            confirmed = true;
+            break;
+          }
+          await sleep(250);
+        }
+        // 派遣同样是异步请求，等到按钮真的切到旅行态再判定（最长 20s）
+        const afterTxt = await waitUntil(page, () => {
+          const b = document.querySelector('button.gs-buddy-travel');
+          const t = b ? (b.innerText || '').replace(/\s+/g, ' ').trim() : '';
+          return /倒计时|回家|采风|旅行中|距离/.test(t) ? t : null;
+        }, 20000, 500) || (await readBtnText(page) || '');
+        if (/倒计时|回家|采风|旅行中|距离/.test(afterTxt)) {
+          r.catTravel = 'dispatched:' + afterTxt;
+          const tail = confirmed ? '主按钮+确认框完成派遣' : '点主按钮后自动进入旅行态';
+          r.note = r.note ? r.note + ' → ' + tail : tail;
+        } else if (confirmed) {
+          r.catTravel = 'dispatched-unverified:' + afterTxt;
+          r.note = '已点确认框但状态未切到旅行态，请人工核对';
+        } else {
+          r.catTravel = 'dispatched-unverified:' + afterTxt;
+          r.note = '点了主按钮但未出现确认弹窗，请人工核对';
+        }
+      } catch (e) {
+        r.catTravel = 'click-failed:' + txt + ' (' + e.message.split('\n')[0] + ')';
+      }
+    }
+  } else {
+    r.catTravel = 'unknown-state:' + txt;
+  }
+
+  return r;
+}
+
 (async () => {
-  const res = { login: null, catTravel: null, note: '', mode: null, error: null };
+  const res = { login: null, catTravel: null, note: '', attempts: 0, error: null };
   let browser, page;
+  const history = [];
   try {
     browser = await getBrowser();
     const context = browser.contexts()[0] || await browser.newContext();
     page = await context.newPage();          // 新开一个 tab，跑完只关 tab
 
-    // ---- 进入成长中心（验证登录态）----
-    // 冷启动兜底：常驻 Edge 当天首次拉起时，进程虽已监听 CDP 端口，但渲染/网络栈
-    // 尚未就绪，首次真实导航可能吃掉 30s 预算而超时（2026-09-10 19:00 复现，login:null）。
-    // 故做「最多 2 次」导航：首次超时则等 4s 让浏览器热身后重试，第二次基本必过。
-    let navOk = false;
-    for (let attempt = 0; attempt < 2 && !navOk; attempt++) {
-      try {
-        await page.goto(GROWTH, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        navOk = true;
-      } catch (e) {
-        if (attempt === 0) {
-          console.error('[i] 首次导航超时（疑似冷启动），等待浏览器热身后重试…');
-          await sleep(4000);
-        } else {
-          throw e;
-        }
-      }
-    }
-    await sleep(4000);
+    // ---- v4 整流程重试：最多 MAX_ROUNDS 轮 ----
+    // 已达成（dispatched / already-traveling / already-dispatched-today）→ 收工
+    // 登录不通（login:false）→ 重试无意义，收工（等用户扫码）
+    // 瞬时失败（no-travel-button / click-failed / dispatched-unverified / 礼物相关）→ 重载再来一轮
+    for (let round = 1; round <= MAX_ROUNDS; round++) {
+      if (round > 1) console.error('[i] 第 ' + round + ' 轮重试（上一轮：' + history[history.length - 1] + '）…');
+      const r = await runOnce(page);
+      history.push(r.catTravel);
+      res.attempts = round;
+      res.login = r.login;
+      res.catTravel = r.catTravel;
+      if (r.giftLog) res.giftLog = r.giftLog;
+      if (r.note) res.note = r.note;
 
-    if (page.url().includes('/login')) {
-      // ---- v3 零扫码：token → deviceCode → client-login 桥，静默换会话 ----
-      // 会话 cookie 是会话级的，Edge 进程重启即失效；桌面端每次都靠这个桥静默续会话。
-      // 这里复刻同一条链路（wb_session_bridge.js，2026-09-15 实测通过）：
-      //   POST copilot.tencent.com/v2/plugin/device/auth/code（Bearer+X-Refresh-Token）
-      //   → GET www.workbuddy.cn/console/client-login?code=xxx&target=/profile/growth-center
-      //   → 302 种 session cookie → 回到成长中心
-      try {
-        console.error('[i] SSO 会话失效，走 client-login 桥静默换会话（零扫码）…');
-        const loginUrl = await bridge.getClientLoginUrl('/profile/growth-center');
-        await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await sleep(4000);
-      } catch (e) {
-        console.error('[i] 静默换会话失败: ' + String(e.message || e).split('\n')[0]);
-      }
+      if (r.login === false) break;                       // 登录不通，重试无意义
+      if (SETTLED.test(r.catTravel || '')) break;         // 已达成目的
+      if (!RETRYABLE.test(r.catTravel || '')) break;      // 非瞬时失败，重试无意义
+      if (round < MAX_ROUNDS) await sleep(3000);          // 稍等再重载，给服务端/渲染一点缓冲
     }
 
-    if (page.url().includes('/login')) {
-      res.login = false;
-      res.catTravel = 'skipped: not logged in';
-      res.note = '静默换会话失败（桌面端令牌可能过期，请打开 WorkBuddy 桌面端刷新）→ 落回扫码兜底：运行 wb_login_once.js 重新扫码';
-    } else {
-      res.login = true;
-
-      let state = await getTravelBtn(page);
-      if (!state) {
-        res.catTravel = 'no-travel-button';
-      } else {
-        let { btn, txt } = state;
-
-        // ---- 领礼物态：猫已回家并带回奖励 → 必须真正领取成功，按钮才会回到「派猫猫旅行」----
-        let giftBlocked = false;
-        if (/领取|礼物/.test(txt)) {
-          const giftEnabled = await btn.isEnabled().catch(() => false);
-          if (!giftEnabled) {
-            res.catTravel = 'gift-claim-disabled:' + txt;
-            giftBlocked = true;
-          } else {
-            const g = await claimGift(page);
-            res.giftLog = g.log;
-            const s2 = await getTravelBtn(page, 20000);   // 领完重读按钮态
-            if (s2) { btn = s2.btn; txt = s2.txt; }
-            if (!g.ok) {
-              giftBlocked = true;
-              res.catTravel = 'gift-claim-failed:' + txt;
-              res.note = '领取礼物未完成，已中止派遣（详见 giftLog）';
-            } else {
-              res.note = '已领取回流礼物奖励（服务端已结算，按钮离开领取态）';
-            }
-          }
-        }
-
-        // ---- 状态机 ----
-        if (giftBlocked) {
-          // 上面已给出明确结论，不再往下走（旧版会继续落到 unknown-state 并谎报已领礼物）
-        } else if (/倒计时|回家|采风|旅行中|距离/.test(txt)) {
-          res.catTravel = 'already-traveling:' + txt; // 猫在旅行中，等自动回家即可
-        } else if (/派|去旅行|派遣|出发|立即/.test(txt)) {
-          const enabled = await btn.isEnabled().catch(() => false);
-          if (!enabled) {
-            res.catTravel = 'already-dispatched-today:' + txt;
-            res.note = '今日已派猫猫旅行（按钮 disabled），明天 0 点重置';
-          } else {
-            try {
-              await btn.click({ timeout: 6000 });
-              // 轮询等确认弹窗（渲染耗时波动，固定 sleep 会漏）
-              await waitUntil(page, () => !!document.querySelector('.gs-modal-overlay'), 8000, 250);
-              const scope = (await page.locator('.gs-modal-overlay').count())
-                ? page.locator('.gs-modal-overlay') : page;
-              const confirmBtn = scope.locator('button,[role=button],a.btn,div.btn')
-                .filter({ hasText: /确定派出|确定|确认|出发|去吧|开始旅行|立即出发|去旅行/ }).first();
-              let confirmed = false;
-              const cfEnd = Date.now() + 8000;
-              while (Date.now() < cfEnd) {
-                if (await confirmBtn.count() && await confirmBtn.isEnabled().catch(() => false)) {
-                  await confirmBtn.click({ timeout: 5000 }).catch(() => {});
-                  confirmed = true;
-                  break;
-                }
-                await sleep(250);
-              }
-              // 派遣同样是异步请求，等到按钮真的切到旅行态再判定（最长 20s）
-              const afterTxt = await waitUntil(page, () => {
-                const b = document.querySelector('button.gs-buddy-travel');
-                const t = b ? (b.innerText || '').replace(/\s+/g, ' ').trim() : '';
-                return /倒计时|回家|采风|旅行中|距离/.test(t) ? t : null;
-              }, 20000, 500) || (await readBtnText(page) || '');
-              if (/倒计时|回家|采风|旅行中|距离/.test(afterTxt)) {
-                res.catTravel = 'dispatched:' + afterTxt;
-                const tail = confirmed ? '主按钮+确认框完成派遣' : '点主按钮后自动进入旅行态';
-                res.note = res.note ? res.note + ' → ' + tail : tail;
-              } else if (confirmed) {
-                res.catTravel = 'dispatched-unverified:' + afterTxt;
-                res.note = '已点确认框但状态未切到旅行态，请人工核对';
-              } else {
-                res.catTravel = 'dispatched-unverified:' + afterTxt;
-                res.note = '点了主按钮但未出现确认弹窗，请人工核对';
-              }
-            } catch (e) {
-              res.catTravel = 'click-failed:' + txt + ' (' + e.message.split('\n')[0] + ')';
-            }
-          }
-        } else {
-          res.catTravel = 'unknown-state:' + txt;
-        }
-      }
+    if (history.length > 1) {
+      res.note = (res.note ? res.note + ' → ' : '') + '整流程共 ' + history.length + ' 轮（' + history.join(' / ') + '）';
+    }
+    if (res.catTravel && !SETTLED.test(res.catTravel)) {
+      res.note = (res.note ? res.note + ' → ' : '') + '已用尽 ' + MAX_ROUNDS + ' 轮重试仍未达成，建议人工核对';
     }
   } catch (e) {
     res.error = String((e && e.stack) || e).split('\n').slice(0, 3).join(' | ');
