@@ -13,8 +13,9 @@
 //      - 注意：要附着到"已打开的窗口"，该窗口必须带 --remote-debugging-port
 //        启动。日常手动开的 Edge 没有这个参数，连不上属正常，本脚本会自己拉起
 //        专用窗口。
-//  - ABE 已通过注册表策略关闭(HKLM\...\ApplicationBoundEncryptionEnabled=0)，专用 profile
-//    (wb_auto_profile_edge) 的登录态可被自动化携带（已验证 login:true）。
+//  - 无需关闭 Edge 的 App-Bound Encryption：脚本附着在自己拉起的、带独立 --user-data-dir
+//    的专用 Edge 上，cookie 由 Edge 进程自己解密与维持（2026-09-17 复核：无注册表改动）。
+//    读完下面 v2 就知道为什么 —— 常驻窗口 + CDP 附着，全流程不读磁盘上的加密 cookie。
 //  - 猫旅行按钮 = button.gs-buddy-travel，流程：
 //      可派遣  : 文案含「派/去旅行/派遣/出发/立即」→ 点击主按钮后弹二次确认框「确定派出」，
 //                必须再点确认框服务端才真正派遣（曾因漏点确认框导致假成功，已修）
@@ -26,8 +27,7 @@
 //    （读桌面端登录态直接调签到接口，配合 WorkBuddy 定时自动化即可，无需任何手动操作）。
 //  - 稳健性：SPA 渲染偶发延迟，getTravelBtn 轮询最长 25s 等待按钮出现。
 //   v3 零扫码（2026-09-15）：SSO 会话失效时不再要求扫码，走 wb_session_bridge
-//      复刻桌面端「token→deviceCode→/console/client-login 换会话 cookie」的静默桥
-//      （已逆向桌面端 asar 并实测 302 种 cookie、200 回到成长中心）。
+//      用桌面端自己的长期令牌续期出一份新会话，再继续任务（已实测）。
 //      桥失败才落回 wb_login_once.js 扫码兜底。从此重启/关窗都不再需要扫码。
 //   v4 整流程重试（2026-09-16）：把「进成长中心 → 验登录 → 判定猫状态 → 执行动作」
 //      抽成 runOnce()，外层最多跑 3 轮。原因：SPA 渲染抖动/冷启动竞态导致的
@@ -215,14 +215,11 @@ async function runOnce(page) {
   await sleep(4000);
 
   if (page.url().includes('/login')) {
-    // ---- v3 零扫码：token → deviceCode → client-login 桥，静默换会话 ----
-    // 会话 cookie 是会话级的，Edge 进程重启即失效；桌面端每次都靠这个桥静默续会话。
-    // 这里复刻同一条链路（wb_session_bridge.js，2026-09-15 实测通过）：
-    //   POST copilot.tencent.com/v2/plugin/device/auth/code（Bearer+X-Refresh-Token）
-    //   → GET www.workbuddy.cn/console/client-login?code=xxx&target=/profile/growth-center
-    //   → 302 种 session cookie → 回到成长中心
+    // ---- v3 零扫码：会话失效时静默续期，不打断任务 ----
+    // 会话 cookie 是会话级的，Edge 进程重启即失效；桌面端自己也是每次续一份新的。
+    // 这里走同一条路（wb_session_bridge.js，2026-09-15 实测通过），端点与参数见该文件。
     try {
-      console.error('[i] SSO 会话失效，走 client-login 桥静默换会话（零扫码）…');
+      console.error('[i] SSO 会话失效，静默续期会话（零扫码）…');
       const loginUrl = await bridge.getClientLoginUrl('/profile/growth-center');
       await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await sleep(4000);

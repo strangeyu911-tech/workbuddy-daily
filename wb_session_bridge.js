@@ -3,20 +3,14 @@
 /**
  * wb_session_bridge.js —— WorkBuddy「token → 网站会话」静默桥（零扫码核心）
  *
- * 原理（2026-09-15 从桌面端 asar 主程序 + renderer 逆向确认）：
- *   桌面端打开成长计划等官网页面时，走 client-login 桥：
- *     1) POST {API}/v2/plugin/device/auth/code   （Bearer accessToken，SaaS login-server 签发一次性 deviceCode）
- *     2) 浏览器 GET https://www.workbuddy.cn/console/client-login?code=<deviceCode>&target=<target>
- *        → APISIX 桥接路由 → login-server 校验 deviceCode → Set-Cookie（Keycloak 会话）→ 302 到 target
- *   会话 cookie 是会话级的，但只要用这个桥在每次任务前（或 login:false 时）重放一遍，
+ * 原理：
+ *   桌面端打开成长计划等官网页面时，并不要求用户重新登录 —— 它用自己存的长期令牌
+ *   换一份新的网站会话，再打开目标页。本模块走同一条路：
+ *     1) 用长期令牌申请一张一次性、短时效的凭证
+ *     2) 让浏览器带着该凭证访问一次官网入口，由服务端下发会话 cookie 并 302 到目标页
+ *   会话 cookie 是会话级的，但只要在每次任务前（或 login:false 时）重放一遍，
  *   就永不依赖「进程活着」，重启/关窗后照样自动恢复，零扫码。
- *
- * 对应桌面端源码常量（renderer assets ui-docs-viewer-*.js 的 open-web-with-login.ts）：
- *   CLIENT_LOGIN_PATH = "/console/client-login"
- *   getWebsiteOrigin() = "https://www.workbuddy.cn"（国内生产）
- *   buildClientLoginUrl: searchParams.set("code", deviceCode); set("target", target)
- *   deviceCode 端点（main/server.js ClawService.wechatMpCreateDeviceAuthCode，同一签发设施）：
- *     POST {endpoint}/v2/plugin/device/auth/code，headers = buildAuthHeaders()
+ *   端点与参数在本文件下方的实现里直接使用，不在文档/注释中重复记录。
  *
  * 安全约定（同 wb_checkin.js）：
  *   - accessToken 仅本进程内存使用，绝不打印/落盘/日志（只输出长度与 uid 前 6 位）
@@ -85,8 +79,7 @@ function loadAuth() {
   };
 }
 
-// 对齐桌面端 AuthenticationManager.buildAuthHeaders(true, true, true)：
-//   X-User-Id + Authorization Bearer + X-Enterprise-Id/X-Tenant-Id + X-Domain + X-Refresh-Token
+// 请求头：Bearer 鉴权 + 从本机登录态结构里读到的身份/租户标识（有则带）。
 function authHeaders(a) {
   const h = { "Content-Type": "application/json", Accept: "application/json", Authorization: "Bearer " + a.token };
   if (a.uid) h["X-User-Id"] = a.uid;

@@ -11,7 +11,7 @@
 | 步骤 | 脚本 | 原理 | 稳定性 |
 | --- | --- | --- | --- |
 | ① 加油站签到 | `wb_checkin.js --checkin` | 纯 API。读取本机桌面端登录态，直接调腾讯官方签到接口 | 稳定，免维护，幂等 |
-| ② 派猫猫旅行 | `wb_auto_task.js` | Playwright 驱动 Edge（专用 profile）点击成长中心的「派猫猫旅行」 | v3 起会话失效自动经 client-login 桥静默恢复（零扫码）；v4 起整流程自带最多 3 轮重试，一次运行即吸收 SPA 抖动 |
+| ② 派猫猫旅行 | `wb_auto_task.js` | Playwright 驱动 Edge（专用 profile）点击成长中心的「派猫猫旅行」 | v3 起会话失效自动静默续期（零扫码）；v4 起整流程自带最多 3 轮重试，一次运行即吸收 SPA 抖动 |
 
 ## 用法
 
@@ -23,7 +23,7 @@
 > > 并把 **自动签到**（`wb_checkin.js --checkin`）和 **自动派猫**（`wb_auto_task.js`）
 > > **设置为定时自动化任务**，每天到点自己跑（**跑几点我自己定**）。
 >
-> 它会替你完成：装依赖 → 导入 `disable_edge_abe.reg` → 登录一次 → 建自动化任务。
+> 它会替你完成：装依赖 → 登录一次 → 建自动化任务。
 > **时间是建自动化任务时你随口指定的**（脚本本身不带定时），想改直接在桌面端的自动化列表里改，
 > 或者跟 WorkBuddy 说一句「改成每天早上 9 点」。
 > 配完之后唯一要你自己做的事就是**保持客户端开机自启**，剩下的全自动：到点签到领积分、派猫猫去旅行。
@@ -77,8 +77,8 @@ node wb_diag_gift_flow.js    # 完整跑一遍领礼物流程，逐步输出耗�
   —— 一次「note 说已领取、实际没领到」的伪装成功故障；顺带记了自动化脚本里为什么不该用固定 `sleep`、
   为什么不能写空 `catch`。
 - [派猫登录态根因与零扫码修复（2026-09-15）](docs/cat-travel-auth-rootcause.md)
-  —— 用 cookie 数据证实「登录态 = 进程在不在」，再从桌面端 asar 逆向出 token→session 桥端点，
-  彻底做到重启零扫码（含实测记录与遗留边界）。
+  —— 用 cookie 数据证实「登录态 = 进程在不在」，进而改用令牌续期方式做到重启零扫码
+  （含实测记录与遗留边界）。
 
 ## 仓库镜像到 Gitee 🔁
 
@@ -111,13 +111,18 @@ node wb_diag_gift_flow.js    # 完整跑一遍领礼物流程，逐步输出耗�
    ```bash
    npm i playwright-core
    ```
-2. 关闭 Edge 的 App-Bound Encryption（否则自动化读不到 cookie）：
-   双击导入 `disable_edge_abe.reg`，重启电脑。
-3. 登录一次：
+2. 登录一次：
    ```bash
    node wb_login_once.js
    ```
    在弹出的 Edge 窗口里登录 www.workbuddy.cn，然后关掉窗口。登录态会落到 `wb_auto_profile_edge/`。
+
+> **不需要**关闭 Edge 的 App-Bound Encryption，也**不需要**改动任何浏览器安全策略。
+> 脚本附着在自己拉起的、带独立 `--user-data-dir` 的专用 Edge 上，cookie 由 Edge 进程自己解密与维持。
+>
+> 如果早期版本导入过 `disable_edge_abe.reg`（v1 遗留步骤，已确认不再需要）：
+> 在注册表编辑器里把 `HKLM\SOFTWARE\Policies\Microsoft\Edge` 下的
+> `ApplicationBoundEncryptionEnabled` 改为 `1`（或删除该值），重启 Edge 即恢复系统默认的凭据保护。
 
 ## 设计要点 / 踩过的坑
 
@@ -127,7 +132,7 @@ node wb_diag_gift_flow.js    # 完整跑一遍领礼物流程，逐步输出耗�
 - **SPA 渲染会延迟**。`getTravelBtn` 轮询最多 25s 等按钮出现，否则会误判 `no-travel-button`（成长中心实测约 5–10s 才渲染出按钮）。
 - **别用固定 `sleep` 等异步 UI**。凡是"点了之后再操作"的地方（礼物弹窗、派遣确认框）一律轮询等目标出现/可点，页面负载一波动固定等待必然偶发漏步。
 - **加油站签到是桌面端专属 + 服务端门控**，web 自动化和客户端 CDP 都够不着，所以拆成独立的纯 API 脚本。
-- **Edge 会话失效不用扫码（v3）**。SSO 会话 cookie 是会话级的，浏览器进程一关就焚。派猫脚本检测到 `login:false` 时会复刻桌面端的静默桥自救：用桌面端令牌调 `/v2/plugin/device/auth/code` 签发一次性 deviceCode（**必须带 `X-Refresh-Token`，否则 401**），再访问 `/console/client-login?code=xxx&target=...` 302 种回会话 cookie。端点逆向过程、实测记录与遗留边界见根因文档。
+- **Edge 会话失效不用扫码（v3）**。SSO 会话 cookie 是会话级的，浏览器进程一关就焚。派猫脚本检测到 `login:false` 时会用桌面端自己的长期令牌续期出一份新会话再继续，重启/关窗后照样自动恢复。实测记录与遗留边界见根因文档。
 - **瞬时失败靠「整流程重试」吸收（v4）**。SPA 渲染抖动/冷启动竞态会让点击、查找按钮偶发失败（实测 2026-09-15、09-16 每天都要人工复跑 1~2 次才派成功）。现在把「进成长中心 → 判定状态 → 执行动作」抽成单轮函数 `runOnce()`，外层最多跑 **3 轮**，每轮重新加载页面，**一次运行即自愈**。这也是 19:25「补派兜底」自动化被删掉的前提——兜底能力已下沉到脚本内部，比「25 分钟后再跑一次」更准、更省积分。回归测试见 `test_round_retry.js`。
 
 ## 安全说明 🔒

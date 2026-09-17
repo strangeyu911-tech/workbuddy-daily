@@ -1,7 +1,9 @@
 // asar selective extractor: list files, extract matching ones
 const fs = require('fs');
-const ASAR = 'C:/Users/23159/AppData/Local/Programs/WorkBuddy/resources/app.asar';
-const OUT = 'C:/Users/23159/WorkBuddy/2026-08-15-22-57-14/_asar_main';
+const path = require('path');
+const ASAR = process.env.WB_ASAR
+  || path.join(process.env.LOCALAPPDATA || '', 'Programs', 'WorkBuddy', 'resources', 'app.asar');
+const OUT = process.env.WB_ASAR_OUT || path.join(__dirname, '_asar_main');
 
 function readHeader() {
   const fd = fs.openSync(ASAR, 'r');

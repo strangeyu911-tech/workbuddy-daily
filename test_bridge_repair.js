@@ -1,6 +1,6 @@
-// 一次性验证脚本：模拟「重启后会话失效」→ 验证 wb_auto_task.js 的静默换会话桥
+// 一次性验证脚本：模拟「重启后会话失效」→ 验证 wb_auto_task.js 的静默续期
 // 流程：拉起常驻 Edge → clearCookies 清掉所有会话 cookie → 运行 wb_auto_task.js
-// 预期日志：`[i] SSO 会话失效，走 client-login 桥静默换会话（零扫码）…` 后 login:true
+// 预期日志：`[i] SSO 会话失效，静默续期会话（零扫码）…` 后 login:true
 "use strict";
 const { spawn } = require('child_process');
 const { chromium } = require('./wb_paths').playwright();
