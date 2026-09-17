@@ -6,11 +6,10 @@
 //   v3 判据改为「页面 URL 真正离开 /login」+ headless 权威验证。
 //   v4 网络预检降级为警告、新增 --fresh / --proxy 等。
 //   v5（本版）改为与 wb_auto_task.js 相同的「常驻 Edge + CDP 附着」架构：
-//      - 背景发现：workbuddy.cn 登录 = Keycloak SSO（/console/accounts 302 →
-//        auth/realms/copilot）。Keycloak identity cookie 是浏览器会话级，
-//        v4 登录完关浏览器它就没了；磁盘上只剩 7 天期的 app session cookie，
+//      - 背景：官网登录走 SSO 跳转，其身份 cookie 是浏览器会话级；
+//        v4 登录完关浏览器它就没了，磁盘上只剩 7 天期的应用会话 cookie，
 //        而该 cookie 会在服务端被单独作废（2026-09-06 实测：cookie 在、
-//        服务端 302 回登录页）→ 登录态莫名失效。
+//        服务端仍回登录页）→ 登录态莫名失效。
 //      - 对策：登录也在常驻窗口里新开 tab 完成，登完**不关浏览器**。
 //        SSO 会话常驻内存，app session 落盘，双保险。
 //      - 若 9223 端口已有常驻 Edge 则直接附着复用（不再 killStaleEdge，
