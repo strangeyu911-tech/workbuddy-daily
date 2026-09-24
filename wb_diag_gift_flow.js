@@ -1,5 +1,19 @@
 // 探针4：完整跑「领礼物」流程，全程 generous 轮询 + 逐步 dump，验证 2s 等待是否为失败根因
 // 只领礼物，不派遣
+// ── [本机补丁] CDP 探测必须绕过系统代理 ──────────────────────────────
+// 本机 HTTP_PROXY/HTTPS_PROXY 指向一个本地代理端口时，undici 的 fetch 会把
+// 127.0.0.1:9223 也送去代理，拿到代理的 502 而误判「常驻 Edge 未就绪」。
+// 注意：传 `proxy: undefined` 到 fetch init **无效** —— undici 读的是环境变量。
+// 本仓库出网只有两类（本机 CDP + 腾讯官方域名），都该直连，故直接清空代理变量。
+if (!globalThis.__loopbackNoProxy) {
+  globalThis.__loopbackNoProxy = true;
+  for (const k of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]) {
+    if (process.env[k]) delete process.env[k];
+  }
+  process.env.NO_PROXY = "127.0.0.1,localhost,::1";
+  process.env.no_proxy = process.env.NO_PROXY;
+}
+
 const { chromium } = require('./wb_paths').playwright();
 const { spawn } = require('child_process');
 const EDGE = require('./wb_paths').edge();

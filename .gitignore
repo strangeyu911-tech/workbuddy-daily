@@ -30,5 +30,36 @@ auth.js
 # 一次性诊断脚本与临时产物（2026-09-14 逆向期间产出，绑死本机绝对路径，无复用价值）
 # 注意：仓库里有意保留的是 wb_diag_*.js（派猫流程排障，见 README）
 _diag_*.js
+_diag_*.txt
 _monitor_growth.ps1
 _edge_cmds.txt
+
+# 运行输出捕获（排查编码/退出码时重定向产生，非交付物）
+# 本仓库约定：任何 `_` 前缀的 .txt 都是本机临时产物，一律不入库
+_*.txt
+
+# 逆向/wd 探查期产物（2026-09-17）：前端 bundle 反编译件、接口探查脚本、
+# PR-203 评估底稿、以及一个嵌套的第三方克隆（嵌入仓库会破坏本仓库的 git 结构）
+_wd_chunks/
+_wd_growth.js
+_wd_growth.html
+_wd_emit.txt
+_wd_probe_*.mjs
+_wd_probe_*.js
+_wd_find_*.js
+_wd_live_verify.mjs
+_wd_review_203*.md
+_wd_pr203/
+_wd_target/
+
+# 兜底：所有 _wd_ 前缀逆向/wd 探查产物一律不入库（防止新增遗漏被误提交）
+_wd_*
+
+# 身份/仓库扫描一次性脚本（含本机仓库路径与邮箱枚举，只留本机）
+_check_emails.mjs
+_scan_repos.mjs
+
+# 本机补丁/修复一次性脚本（已应用，无复用价值）
+_patch_noproxy.js
+_patch_portalive.js
+_fix_shebang.js

@@ -42,6 +42,23 @@
 //   node wb_auto_task.js            # 正常跑任务（复用/拉起常驻窗口）
 //   node wb_auto_task.js --kill     # 任务结束后关掉常驻 Edge（偶尔想彻底清理时用）
 
+// ── [本机补丁] 让 undici 别把环回请求送进系统代理 ────────────────────
+// 事实（2026-09-17 实测，勿再凭印象改）：
+//   · undici 的全局 fetch 从**环境变量**读代理；给 fetch 传 `{proxy:undefined}` 无效。
+//   · 本机 HTTP_PROXY 指向一个本地代理端口，实测它**能正确转发**环回请求：
+//     9223 在听 → HTTP 200；没人听 → 代理回 502（直连则是 ECONNREFUSED）。
+//   · 所以 502 == "确实没在听"，**不是**代理误路由造成的假阴性。
+//     （曾误判成"代理把环回送错地方"，白查两轮；真因是 Edge 冷启动太慢。）
+//   · 保留本块只是让环回请求少绕一层；出网不受影响（清/不清代理实测都通）。
+if (!globalThis.__loopbackNoProxy) {
+  globalThis.__loopbackNoProxy = true;
+  for (const k of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]) {
+    if (process.env[k]) delete process.env[k];
+  }
+  process.env.NO_PROXY = "127.0.0.1,localhost,::1";
+  process.env.no_proxy = process.env.NO_PROXY;
+}
+
 const { chromium } = require('./wb_paths').playwright();
 const { spawn } = require('child_process');
 const bridge = require('./wb_session_bridge');
