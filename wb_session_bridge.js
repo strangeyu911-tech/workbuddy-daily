@@ -49,7 +49,17 @@ const CLIENT_LOGIN_PATH = "/console/client-login";
 const DEFAULT_TARGET = "/profile/growth-center";
 
 function mask(s, n = 6) {
-  if (!s) return "(empty)";
+  if (s == null) return "(empty)";
+  // 09-24 起桌面端把 accessToken 改成加密信封对象 { $wbEncrypted:1, envelope:"..." }
+  // （at-rest 加密，解密密钥经 IPC 由桌面端下发，不在磁盘明文存储）。
+  // 此处若拿到对象，绝不对其调 .slice（会抛 "s.slice is not a function"），只报类型。
+  if (typeof s !== "string") {
+    if (typeof s === "object") {
+      const kind = s && s.$wbEncrypted ? "encrypted-envelope" : "object";
+      return "[" + kind + "]";
+    }
+    return "[" + typeof s + "]";
+  }
   return s.slice(0, n) + "…(len=" + s.length + ")";
 }
 
@@ -82,7 +92,14 @@ function loadAuth() {
   }
   const auth = json.auth || {};
   const token = auth.accessToken;
-  if (!token) return { error: "登录态中未找到 auth.accessToken" };
+  // 09-24 起桌面端把 accessToken / refreshToken 由明文改成了加密信封对象
+  // { $wbEncrypted:1, envelope:"base64" }。解密密钥经 IPC 由桌面端下发，
+  // 不在磁盘明文存储，独立脚本无法解密 → 静默换会话（桌面端令牌通道）不可用。
+  // 提前识别，避免 mask() 对对象调 .slice 抛 "s.slice is not a function"。
+  if (token && typeof token === "object") {
+    return { error: "桌面端令牌为加密信封（at-rest 加密，密钥经 IPC 下发，独立脚本无法解密）；静默换会话通道不可用，请落回浏览器会话或扫码兜底" };
+  }
+  if (!token || typeof token !== "string") return { error: "登录态中未找到可用的 auth.accessToken（类型=" + typeof token + "）" };
   return {
     file,
     token,
@@ -91,6 +108,21 @@ function loadAuth() {
     domain: auth.domain || "",
     enterpriseId: (json.account || {}).enterpriseId || "",
   };
+}
+
+// 供调用方提前判断：桌面端令牌是否可被本脚本独立使用（明文字符串）。
+// 若为加密信封对象，静默换会话必败，应直接落回扫码兜底，避免无谓的 30s 超时 + 崩溃式报错。
+function isDesktopTokenUsable() {
+  const file = findAuthFile();
+  if (!file) return false;
+  try {
+    const json = JSON.parse(fs.readFileSync(file, "utf8"));
+    const auth = json.auth || {};
+    const token = auth.accessToken;
+    return !!(token && typeof token === "string");
+  } catch (e) {
+    return false;
+  }
 }
 
 // 请求头：Bearer 鉴权 + 从本机登录态结构里读到的身份/租户标识（有则带）。
@@ -185,4 +217,4 @@ if (require.main === module) {
   else console.log("用法: node wb_session_bridge.js --test | --url");
 }
 
-module.exports = { getDeviceCode, getClientLoginUrl, loadAuth, WEBSITE, CLIENT_LOGIN_PATH, DEFAULT_TARGET };
+module.exports = { getDeviceCode, getClientLoginUrl, loadAuth, isDesktopTokenUsable, WEBSITE, CLIENT_LOGIN_PATH, DEFAULT_TARGET };

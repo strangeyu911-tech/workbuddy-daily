@@ -29,6 +29,11 @@
 //   v3 零扫码（2026-09-15）：SSO 会话失效时不再要求扫码，走 wb_session_bridge
 //      用桌面端自己的长期令牌续期出一份新会话，再继续任务（已实测）。
 //      桥失败才落回 wb_login_once.js 扫码兜底。从此重启/关窗都不再需要扫码。
+//      ⚠️ 09-24 起桌面端把 accessToken 改成加密信封对象 { $wbEncrypted:1, envelope:"..." }
+//      （at-rest 加密，密钥经 IPC 下发，独立脚本无法解密），故静默换会话通道已不可用。
+//      wb_session_bridge.isDesktopTokenUsable() 会提前识别并短路，直接落回扫码兜底，
+//      不再对信封对象调 .slice 崩出 "s.slice is not a function"。日常会话由每日派猫+签到
+//      维持存活，真正需扫码的概率极低（仅 Edge 重启/长期不开客户端后）。
 //   v4 整流程重试（2026-09-16）：把「进成长中心 → 验登录 → 判定猫状态 → 执行动作」
 //      抽成 runOnce()，外层最多跑 3 轮。原因：SPA 渲染抖动/冷启动竞态导致的
 //      no-travel-button / click-failed / dispatched-unverified 都是**瞬时**的，
@@ -237,8 +242,15 @@ async function runOnce(page) {
     // 这里走同一条路（wb_session_bridge.js，2026-09-15 实测通过），端点与参数见该文件。
     try {
       console.error('[i] SSO 会话失效，静默续期会话（零扫码）…');
-      const loginUrl = await bridge.getClientLoginUrl('/profile/growth-center');
-      await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      // 09-24 起桌面端令牌改为加密信封（at-rest 加密，密钥经 IPC 下发），
+      // 独立脚本无法解密 → 静默换会话通道不可用，跳过这步直接落回扫码兜底，
+      // 避免对信封对象调 .slice 崩出 "s.slice is not a function" 再耗 30s 超时。
+      if (!bridge.isDesktopTokenUsable()) {
+        console.error('[i] 桌面端令牌为加密信封（独立脚本无法解密），跳过静默换会话，落回扫码兜底');
+      } else {
+        const loginUrl = await bridge.getClientLoginUrl('/profile/growth-center');
+        await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      }
       await sleep(4000);
     } catch (e) {
       console.error('[i] 静默换会话失败: ' + String(e.message || e).split('\n')[0]);
