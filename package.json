@@ -1,0 +1,22 @@
+{
+  "name": "workbuddy-daily",
+  "version": "1.0.0",
+  "private": true,
+  "description": "每天自动完成 Buddy 加油站签到 + 派猫猫旅行（Node.js + Playwright-core / Edge）",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "paths": "node wb_paths.js",
+    "login": "node wb_login_once.js --timeout=15",
+    "login-then-run": "node wb_login_then_run.js",
+    "checkin": "node wb_checkin.js --checkin",
+    "checkin:status": "node wb_checkin.js --status",
+    "cat": "node wb_auto_task.js",
+    "tasks": "node wb_tasks.js"
+  },
+  "dependencies": {
+    "playwright-core": "^1.62.0"
+  }
+}

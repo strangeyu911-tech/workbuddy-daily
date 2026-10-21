@@ -12,6 +12,7 @@ local.config.js
 node_modules/
 *.log
 *.old
+err_auto*.txt
 
 # 系统文件
 .DS_Store
