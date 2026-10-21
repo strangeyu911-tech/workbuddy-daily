@@ -11,15 +11,23 @@
 仓库地址（国内直连，免梯）：<https://gitee.com/strange_touchannel/workbuddy-daily>
 GitHub 镜像：<https://github.com/strangeyu911-tech/workbuddy-daily>
 
+**这一步由你（AI）完成，不要让用户碰 git、也不要让用户去网页点下载。** 优先 clone：
+
 ```bash
 git clone https://gitee.com/strange_touchannel/workbuddy-daily.git workbuddy-daily
 cd workbuddy-daily
 ```
 
-用户不会用 git 就引导他在网页端下载 ZIP 解压，然后 `cd` 进解压目录。
+环境里没有 git，就你自己下载 ZIP 并解压（同样不麻烦用户）：
+
+```bash
+curl -L -o wbd.zip "https://gitee.com/strange_touchannel/workbuddy-daily/repository/archive/main.zip"
+tar -xf wbd.zip          # Windows 10+ 自带 tar；或用 PowerShell: Expand-Archive wbd.zip -DestinationPath .
+cd workbuddy-daily       # 解压出的目录名以实际为准
+```
 
 ⚠️ **不要放临时目录**（如 `%TEMP%`、下载文件夹）—— 登录态要长期留在 `wb_auto_profile_edge/` 里，
-放临时目录迟早被清理。
+放临时目录迟早被清理。记住最终的**绝对路径**，第 5 步建自动化要用。
 
 ## 1. 环境检测
 
@@ -27,8 +35,9 @@ cd workbuddy-daily
 node -v
 ```
 
-- 需要 **Node ≥ 22**（脚本依赖原生 `fetch`）。版本不够或没装 → 引导安装
-  （`winget install OpenJS.NodeJS.LTS`，或官网 <https://nodejs.org> 下 LTS），
+- 需要 **Node ≥ 22**（脚本依赖原生 `fetch`）。版本不够或没装 → **由你执行安装**
+  （`winget install OpenJS.NodeJS.LTS`，或官网 <https://nodejs.org> 下 LTS）；
+  需要管理员确认（UAC）时，明确指示用户运行哪一条命令，不要让他自己琢磨。
   **装完必须新开终端**再验证一次 `node -v`。
 - 确认路径解析：`node wb_paths.js`。它会打印 edge / profile / playwright / node 的解析结果。
   此时 playwright 一栏显示「✗ 未找到」是正常的，下一步装。
@@ -78,9 +87,10 @@ node wb_login_then_run.js
 - 签到输出含 `code=10001`（今天已签到）→ 幂等，算成功
 - 任一失败 → 查第 6 节兜底表，**不要反复重跑**（脚本自带最多 3 轮重试，复跑不会解决登录态问题）
 
-## 5. 设为每日自动化（用户对自己的 WorkBuddy 说一句话）
+## 5. 设为每日自动化
 
-把下面这段话给用户，让他复制给自己的 WorkBuddy（时间、仓库目录替换成实际的）：
+**优先由你直接为用户创建定时自动化**（把 `<HH:MM>`、`<仓库绝对路径>` 替换成实际值）。
+若你的环境不支持代建自动化，再把下面的话术交给用户，让他复制给自己的 WorkBuddy：
 
 > 每天 <HH:MM> 依次执行两步：① `cd <仓库绝对路径> && node wb_checkin.js --checkin`
 > （Buddy 加油站签到）；② `cd <仓库绝对路径> && node wb_auto_task.js`（派猫猫旅行，输出 JSON）。
