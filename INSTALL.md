@@ -95,11 +95,12 @@ node wb_login_then_run.js
 > 每天 <HH:MM> 依次执行两步：① `cd <仓库绝对路径> && node wb_checkin.js --checkin`
 > （Buddy 加油站签到）；② `cd <仓库绝对路径> && node wb_auto_task.js`（派猫猫旅行，输出 JSON）。
 > 判定：签到含 code=0 且出现 credit/streak_days → 成功；code=10001 → 今日已签（算成功）；
-> 页面跳 /login、401/403、连续网络失败 → 登录态失效，运行
-> `node wb_login_once.js --timeout=15` 打开登录窗并提醒我扫码，检测到登录成功后自动补跑两步。
+> 页面跳 /login、401/403、连续网络失败 → 登录态失效，用后台方式运行
+> `node wb_login_then_run.js`（不要前台等）：它会弹登录窗并提醒我扫码，检测到登录成功后
+> **自动在同一个常驻会话里跑完「派猫 → 签到」**，本轮不必再手动补跑第二步。
 > 派猫 login:true 且 catTravel 以 dispatched 开头 → 成功；
 > already-traveling / already-dispatched-today → 跳过（合理）；
-> login:false → 同上，开登录窗等我扫码。
+> login:false → 同上，后台跑 `node wb_login_then_run.js` 等扫码。
 > 汇报时严禁输出任何 token / accessToken。
 
 脚本本身**不含任何定时逻辑**——几点跑完全由用户的自动化配置决定，这是刻意设计。
