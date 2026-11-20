@@ -10,7 +10,7 @@
 
 | 步骤 | 脚本 | 原理 | 稳定性 |
 | --- | --- | --- | --- |
-| ① 加油站签到 | `wb_checkin.js --checkin` | 复用常驻 Edge（专用 profile）里已登录的 www.workbuddy.cn 页面，**同源 fetch** 调官方签到接口；不读、不打印任何 token | 稳定，幂等；登录态由每日运行自己维持 |
+| ① 加油站签到 | `wb_checkin.js --checkin` | **优先附着 WorkBuddy 桌面端会话**（CDP 9222，refreshToken 自动续期），页面内同源调新接口 `checkin-activity-status` 查状态、已签跳过、未签才领；桌面端不在才回退独立 Edge（9223） | 稳定，幂等；不读、不打印任何 token，无需扫码 |
 | ② 派猫猫旅行 | `wb_auto_task.js` | Playwright 驱动 Edge（专用 profile）点击成长中心的「派猫猫旅行」 | v4 起整流程自带最多 3 轮重试，一次运行即吸收 SPA 抖动 |
 
 ## 用法
@@ -19,18 +19,18 @@
 >
 > 不用你记命令、也不用手动配调度。把这段话直接甩给 WorkBuddy：
 >
-> > 帮我安装 WorkBuddy Daily：https://gitee.com/strange_touchannel/workbuddy-daily
+> > 帮我安装 WorkBuddy Daily：https://github.com/strangeyu911-tech/workbuddy-daily
 > > 按仓库里的 INSTALL.md 执行。装好后把每日签到（`wb_checkin.js --checkin`）
 > > 和自动派猫（`wb_auto_task.js`）设为定时自动化任务，每天到点自己跑。
 >
-> 它会替你完成：装依赖 → 拉起登录窗等你扫码 → 建自动化任务。
-> **你唯一要自己做的事，是在自动弹出的 Edge 窗口里登录一次**（微信扫码或账号密码，以页面为准）——
-> 这是唯一没法代劳的一步，原因见下方「为什么不复用你已有的浏览器登录态」。
-> 登录成功后永久有效，日常全自动：到点签到领积分、派猫猫去旅行。
-> Edge 重启/关窗导致的会话失效，后台跑一次 `node wb_login_then_run.js`：它会弹出登录窗等你扫码，
-> 检测到登录成功后**在同一个常驻会话里自动跑完「派猫 → 签到」**，不用再手动补跑
-> （只想要登录窗、不跑任务时才用 `node wb_login_once.js --timeout=15`。
-> 桌面端令牌自 2026-09-24 起改为加密信封，独立脚本无法解密，「静默续期」路线已废弃）。
+> 它会替你完成：装依赖 → 建自动化任务。
+> **签到这一步不用扫码**：脚本会直接附着你正在运行的 WorkBuddy 桌面端会话
+> （它靠 refreshToken 自动续期、几乎永不过期），到点查当天是否已签、没签就领。
+> **只有「派猫猫」还需要一次性登录**：在自动弹出的 Edge 窗口里登录一次
+> （微信扫码或账号密码，以页面为准），之后保持常驻即可。
+> 桌面端被关掉时签到会回退到这个 Edge 会话；若两者都失效，后台跑一次
+> `node wb_login_then_run.js`：弹出登录窗等你扫码，成功后**在同一会话里自动跑完
+> 「派猫 → 签到」**，不用再手动补跑（只想要登录窗就 `node wb_login_once.js --timeout=15`）。
 >
 > **时间是建自动化任务时你随口指定的**（脚本本身不带定时），想改直接在桌面端的自动化列表里改，
 > 或者跟 WorkBuddy 说一句「改成每天早上 9 点」。
@@ -67,9 +67,22 @@ node wb_claim_rewards.js --apply
 | `run_rewards.bat` | 活跃地图连登奖励：先干跑，敲 `y` 才真领（会先确保常驻 Edge 在跑） |
 
 ### 签到结果判定
-- `code=0` 且出现 `credit` / `streak_days` → 领取成功
-- `code=10001`（今天已签到）→ 幂等，无需重复，视为成功
+
+签到脚本启动时先附着桌面端会话，先查 `checkin-activity-status`（权威状态接口），
+再决定是否领取。输出里会带来源标记 `（桌面端会话）` 或 `（独立 Edge 会话）`。
+
+- `🎉 签到成功！credit=… streak_days=…` → 领取成功
+- `✅ 今日已签到（code=10001 等价：… checkin-activity-status 确认…）` → 已签，幂等跳过，视为成功
 - `401/403` 或连续网络失败 → 登录态失效，后台跑 `node wb_login_then_run.js` 扫码，成功后自动补跑两步
+
+`--status` 只读查询，输出 `today_checked_in / streak_days / today_credit / 最近签到`，不领取、不写任何状态。
+排障时可用 `--no-desktop` 强制走旧的独立 Edge 路径对比。
+
+> **背景：签到为什么改成桌面端优先？** 旧版用自己的常驻 Edge，会话级 cookie 一关窗/一重启就失效，
+> 又逢 2026-09-24 桌面端 accessToken 改加密信封、外部无法续期，于是每天报「登录态失效」。
+> 但账号积分其实一直照常到账——服务端签到记录连续无断。2026-11-20 用 CDP 直连桌面端查证：
+> 它自己就在每天签到（refreshToken 自动续期、同源调官方接口）。所以 v3 不再跟登录态死磕，改为
+> 附着桌面端、查权威状态、幂等补签。详见下方「为什么签到能免扫码，派猫还要登录一次」。
 
 ### 派猫结果判定
 - `login:true` + `catTravel` 以 `dispatched` 开头 → 派遣成功
@@ -81,21 +94,25 @@ node wb_claim_rewards.js --apply
 
 > 脚本 v4 起自带重试，**一天跑一次就够**，不需要再叠一层「稍后补派」的定时任务。
 
-### 为什么不复用你已有的浏览器登录态？
+### 为什么签到能免扫码，派猫还要登录一次？
 
-很多人会问：脚本连我平时用的 Edge（已经登录着 WorkBuddy）不就行了，为什么还要扫码一次？
-三条路都实测走不通：
+这是本项目最容易误解的一点，2026-11-20 彻底查清（结论已推翻早期的旧判断）：
 
-- **拷贝 cookie 到独立 profile**：workbuddy.cn 的会话 cookie 受 App-Bound Encryption（ABE）保护，
-  密钥绑定 Edge 二进制 + 机器 + profile 实例。跨 profile 移植后 ABE 层解密失败被直接丢弃
-  （实测 0 条可解密）。
-- **attach 正在运行的普通 Edge**：CDP 端口必须在 Edge **启动时**通过 `--remote-debugging-port` 开启，
-  普通 Edge 默认不开；手动重启带端口又慢（1.7GB profile 实测 150s 都绑不上）。
-- **attach 桌面端 WorkBuddy**：其 CDP（9222）只暴露 `file://` 渲染页且禁用 `newPage`，无法驱动；
-  桌面端 accessToken 自 2026-09-24 起改为加密信封，独立进程同样拿不到。
+- **签到：直接复用桌面端会话，免扫码。** WorkBuddy 桌面端常驻运行，自己开了 CDP 端口
+  （`9222`），持有**完整 OAuth 会话**（`accessToken` + `refreshToken` + `expiresAt`，令牌快到期时
+  自动用 refreshToken 静默续期，遇 401 也自动刷新）。脚本只要附着上去、在它的页面里同源调
+  `/billing/meter/checkin-activity-status` 就行——实测 200、`today_checked_in` / `streak_days` 全部权威。
+  桌面端自己其实每天都在签（服务端签到记录连续无断），脚本在这条路上只是「查一下、没签才补」。
+  早期以为「attach 桌面端不可用、必须扫码」是**误判**：那时用的是废弃旧接口 `checkin-status`
+  （恒返回全零），且想 `newPage` 驱动 UI——而签到根本不需要驱动 UI，同源 fetch 即可。
+- **派猫：仍需一次性登录。** 派猫是 Playwright 点击成长中心按钮，需要在自己的 Edge（专用 profile）
+  里驱动页面。普通 Edge 默认不开 CDP、`--remote-debugging-port` 只能启动时指定；桌面端的 CDP 只暴露
+  `file://` 渲染页且禁用 `newPage`，没法拿来点击网站。所以派猫走独立 Edge，登录一次后保持常驻。
+- **拷贝 cookie 到独立 profile 走不通**：workbuddy.cn 的会话 cookie 受 App-Bound Encryption（ABE）保护，
+  密钥绑定 Edge 二进制 + 机器 + profile 实例，跨 profile 移植后解密失败被丢弃（实测 0 条可解密）。
 
-所以架构只能是：脚本拉起自己的专用 Edge profile，在里面**原生登录一次**（扫码或账密），
-之后保持常驻、每日运行自己维持会话。扫码是唯一无法代劳的一步，也是一次性的。
+一句话：**签到靠桌面端会话（免扫码），派猫靠独立 Edge（登录一次）。** 桌面端被关掉时签到会回退到
+独立 Edge 会话；两者都失效才需要扫码兜底。
 
 ### 成长任务清单（只读）
 
@@ -377,14 +394,15 @@ node wb_diag_gift_flow.js    # 完整跑一遍领礼物流程，逐步输出耗�
 - **⚠️ 领取礼物是异步的，别在领取中刷新页面**（2026-09-13 故障根因）。点「领取 N 积分」后按钮会变成「领取中…」并 disabled；旧版只等 1.5s 就 `page.goto` 刷新，把还没完成的领取请求打断 → 礼物其实没领到，刷新后按钮仍是「领取礼物」，而外层 `catch(e){}` 又把异常静默吞掉，最后报 `unknown-state:领取礼物` 还谎称"已领礼物"。现在改成：**全程轮询**（等弹窗、等领取按钮可点、等按钮真正离开「领取」态最多 20s）+ **结果强校验** + **失败重试一轮** + **异常全记进 `res.giftLog`**。
 - **SPA 渲染会延迟**。`getTravelBtn` 轮询最多 25s 等按钮出现，否则会误判 `no-travel-button`（成长中心实测约 5–10s 才渲染出按钮）。
 - **别用固定 `sleep` 等异步 UI**。凡是"点了之后再操作"的地方（礼物弹窗、派遣确认框）一律轮询等目标出现/可点，页面负载一波动固定等待必然偶发漏步。
-- **加油站签到走浏览器同源会话，不读 token**。签到 API 与页面同源（www.workbuddy.cn），常驻 Edge 对该域有有效会话 cookie，页面内同源 fetch 即完成鉴权。早期版本读桌面端登录态文件直连 API，2026-09-24 桌面端把 accessToken 改为加密信封后该路线废弃。
-- **Edge 会话失效需重新扫码（v3 之后的现实）**。SSO 会话 cookie 是会话级的，浏览器进程一关就焚。v3 曾用桌面端长期令牌续期做到重启零扫码，但 2026-09-24 起令牌加密（独立脚本无法解密），该路线已废弃；扫码本身由 `wb_login_once.js` 在自己的专用 profile 里原生完成，登完保持常驻。**掉登录后的自动化兜底是 `wb_login_then_run.js`**（2026-10-07 新增）：登录等待与任务执行放在同一个 Node 进程里（本机会回收父进程退出后的 detached Edge），扫码成功后立即在同一常驻会话内依次跑「派猫 → 签到」，彻底免掉「扫完码还要手动补跑」那一步。
-- **签到收尾不能关浏览器**。`wb_checkin.js` 释放连接时只 `disconnect()` CDP 句柄，不再 `browser.close()` —— 附着模式下 `close()` 会把整个常驻 Edge 关掉，连带焚毁会话级 cookie，还会让后续派猫只能冷启动去撞 `connectOverCDP` 超时（2026-10-07 修复）。同时末尾显式 `process.exit(0)`，避免 `disconnect()` 之后 playwright 句柄占着事件循环、进程挂住不退（2026-10-11 修复）。
+- **签到优先附着桌面端会话（v3，2026-11-20）**。真正稳定自动签到的是 WorkBuddy 桌面端自己：常驻 + refreshToken 静默续期 + 页面内同源调 `/billing/meter/checkin-activity-status`。脚本 v3 学它的方法：连桌面端 CDP（`9222`，可用 `WB_DESKTOP_CDP` 覆盖），已签跳过、未签才领；连不上才回退独立 Edge（`9223`，`--no-desktop` 可强制）。全程不读、不打印任何 token。
+- **用对接口是关键**。`checkin-status` 是废弃旧接口，现在恒返回 `active:false`/全零——早期误判「桌面端会话不可用、必须扫码」就是被它骗了。权威接口是 `checkin-activity-status`（`today_checked_in` / `streak_days` / `checkin_dates` / `daily_credit`）。
+- **派猫的 Edge 会话失效需重新扫码**。派猫用的独立 Edge 会话 cookie 是会话级的，浏览器进程一关就焚。扫码由 `wb_login_once.js` 在专用 profile 里原生完成，登完保持常驻。**掉登录后的兜底是 `wb_login_then_run.js`**（2026-10-07 新增）：登录等待与任务执行放在同一个 Node 进程里（本机会回收父进程退出后的 detached Edge），扫码成功后立即在同一常驻会话内依次跑「派猫 → 签到」，免掉手动补跑。
+- **收尾绝不关桌面端**。`wb_checkin.js` 附着桌面端时只 `disconnect()` CDP 句柄；`browser.close()` 会把用户的 WorkBuddy 桌面端整个关掉（灾难性），所以即使传 `--close` 也只对回退的独立 Edge 生效。末尾显式 `process.exit(0)`，避免 `disconnect()` 后 playwright 句柄占着事件循环、进程挂住不退。
 - **瞬时失败靠「整流程重试」吸收（v4）**。SPA 渲染抖动/冷启动竞态会让点击、查找按钮偶发失败（实测 2026-09-15、09-16 每天都要人工复跑 1~2 次才派成功）。现在把「进成长中心 → 判定状态 → 执行动作」抽成单轮函数 `runOnce()`，外层最多跑 **3 轮**，每轮重新加载页面，**一次运行即自愈**。这也是 19:25「补派兜底」自动化被删掉的前提——兜底能力已下沉到脚本内部，比「25 分钟后再跑一次」更准、更省积分。回归测试见 `test_round_retry.js`。
 
 ## 安全说明 🔒
 
-- 脚本**不读取、不打印、不落盘任何 accessToken**。签到通过常驻 Edge 内的同源 fetch 完成，凭据完全留在浏览器进程内；日志只输出积分与连续签到天数。
+- 脚本**不读取、不打印、不落盘任何 accessToken / refreshToken**。签到通过桌面端（或回退 Edge）页面内的同源 fetch 完成，凭据完全留在浏览器进程内；日志只输出积分与连续签到天数。
 - 只请求 `www.workbuddy.cn` 官方域名（与页面同源），无第三方。
 - `wb_auto_profile_edge/` 是浏览器 profile，**含真实登录 cookie，已在 `.gitignore` 中排除，切勿提交**。
 - 只读本机登录态文件，不修改 WorkBuddy 本体。
